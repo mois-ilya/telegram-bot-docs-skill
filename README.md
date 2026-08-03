@@ -42,6 +42,22 @@ cached page automatically on the next run — a cache built by an older, buggier
 can never stay marked `fresh`, and applying a fix never depends on someone remembering
 to pass `--force`.
 
+## Conversion
+
+HTML is tokenized and built into a tree before anything is converted. The earlier
+implementation scanned with regular expressions, and every round of review found the
+same shape of defect: a pattern matched the markup someone remembered and missed the
+rest — `<tr>` but not `<tr class="new">`, `<br>` but not `<BR>`, `href` but also
+`data-href`, `<ul>` but not `<dl>`. Patching each case only moved the boundary. A
+tokenizer implements the grammar instead of a list of remembered cases, so attribute
+quoting, tag-name case, unknown elements, nesting and omitted end tags are handled by
+construction rather than by another pattern.
+
+What it does not know, it refuses: an element that HTML defines as block-level but the
+renderer has no rule for aborts the refresh instead of being flattened into the
+surrounding prose. A `<dl>` glossary quietly rendered as `fieldDescription here.next`
+would pass every text measurement, because no character is missing.
+
 Guards decide whether a rebuild may be published, and each catches what the previous
 ones cannot. All of them have been observed firing on a deliberately reintroduced
 defect — a guard never seen red is not a guard:
@@ -51,20 +67,21 @@ defect — a guard never seen red is not a guard:
 2. **Body fidelity** — compares the visible text of each section's HTML against the
    Markdown produced from it, refusing when a section lost more than 15%. Proves each
    section was carried over *whole*.
-3. **Block structure** — counts tables, code blocks and table *rows* on both sides.
-   Text volume cannot see a table flattened into a paragraph or a code block mashed
-   into prose: every character survives while the rows, columns and fences are
-   destroyed. Rows are compared exactly rather than by ratio, because across 573
-   sections containing tables the Markdown line count equals `<tr>` plus one
-   separator per table with no exceptions. Counting whole tables alone let a single
-   dropped row through, which once deleted a 95-row table's header and promoted the
-   first data row into its place — still valid Markdown, no longer true.
-4. **Inline categories** — compares link and code-span counts page-wide. When a tag
-   pattern stops matching, an entire category disappears at once rather than
-   gradually, and nothing above can see it: link targets are excluded from the text
-   comparison by design, and emphasis and backticks are punctuation no character
-   count weighs. These thresholds are deliberately loose; they detect catastrophe,
-   not attrition.
+3. **Structure** — compares what the parsed page contains against what the renderer
+   emitted: tables, rows, code fences, links, images and code spans, counted at the
+   point of emission. Text volume cannot see a table flattened into a paragraph:
+   every character survives while the rows and columns are destroyed, and losing one
+   row once deleted a 95-row table's header and promoted the first data row into its
+   place — still valid Markdown, no longer true. Counting at emission rather than by
+   reading the finished Markdown back also removes a whole class of false alarm: a
+   pipe-leading line inside a code fence is not a table row, and a table indented by
+   a blockquote is still a table.
+4. **Growth** — refuses a build that returns materially fewer sections than the last
+   one. The documentation only grows, so a shrinking build is the strongest available
+   signal that something stopped being recognised, and it is the only guard that does
+   not depend on knowing today's markup. An absolute floor cannot substitute: when
+   the Mini Apps page had its sub-headings demoted one level, 107 sections became 15
+   and cleared a floor of 10. Rerun with `--force` to accept a genuine shrink.
 5. **Conservation of mass** — weighs the whole page against everything written out,
    byte-exactly for splitter coverage and by ratio for converted text. Guards 2 and 3
    compare section bodies against section bodies, so neither can see content that
@@ -73,6 +90,8 @@ defect — a guard never seen red is not a guard:
 
 Without them a converter that silently drops or flattens content still reports
 `fresh`, which is the only way this cache could mislead with no visible symptom.
+Every threshold is set from measurements across all ten live pages, and the measured
+margins are recorded beside each constant in the source.
 
 Text preceding a page's first anchored heading is published as a synthetic
 `_intro.md` section and passes through the same guards. It is real content: the

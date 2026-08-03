@@ -9,6 +9,8 @@ Like bots, **Mini Apps** support [seamless authorization](https://telegram.org/b
 
 > To see a **Mini App** in action, try our sample [@DurgerKingBot](https://t.me/durgerkingbot).
 
+---
+
 === recent-changes | section | h3 | parent=- ===
 # Recent changes
 
@@ -214,6 +216,8 @@ Like bots, **Mini Apps** support [seamless authorization](https://telegram.org/b
 - Added the fields *chat*, *can_send_after* to the class [WebAppInitData](https://core.telegram.org/bots/webapps#webappinitdata).
 - Added the [events](https://core.telegram.org/bots/webapps#events-available-for-mini-apps) *backButtonClicked*, *settingsButtonClicked*, *invoiceClosed*.
 
+---
+
 === designing-mini-apps | section | h3 | parent=- ===
 # Designing Mini Apps
 
@@ -240,6 +244,8 @@ Telegram apps are known for being snappy, smooth and following a consistent cros
 - The app should deliver a seamless experience by monitoring the [dynamic theme-based colors](https://core.telegram.org/bots/webapps#color-schemes) provided by the API and using them accordingly.
 - Ensure that the app’s interface respects the [safe area](https://core.telegram.org/bots/webapps#safeareainset) and [content safe area](https://core.telegram.org/bots/webapps#contentsafeareainset) to avoid overlapping with control elements, especially when using fullscreen mode.
 - For Android devices, consider the additional information in the User-Agent (see [User-Agent details](https://core.telegram.org/bots/webapps#additional-data-in-user-agent)) and adjust for the device’s performance class, minimizing animations and visual effects on low-performance devices to ensure smooth performance.
+
+---
 
 === implementing-mini-apps | section | h3 | parent=- ===
 # Implementing Mini Apps
@@ -386,6 +392,8 @@ The bot can call the Bot API method [answerWebAppQuery](https://core.telegram.or
 
 > You can read more about adding bots to the attachment menu [here](https://core.telegram.org/bots/webapps#adding-bots-to-the-attachment-menu).
 
+---
+
 === initializing-mini-apps | section | h3 | parent=- ===
 # Initializing Mini Apps
 
@@ -494,7 +502,7 @@ Mini Apps can [adjust the appearance](https://core.telegram.org/bots/webapps#col
 | subtitle_text_color | String | *Optional*. **Bot API 7.0+** Subtitle text color in the `#RRGGBB` format.<br>Also available as the CSS variable `var(--tg-theme-subtitle-text-color)`. |
 | destructive_text_color | String | *Optional*. **Bot API 7.0+** Text color for destructive actions in the `#RRGGBB` format.<br>Also available as the CSS variable `var(--tg-theme-destructive-text-color)`. |
 
-[![](https://core.telegram.org/file/400780400851/2/6GwDkk6T-aY.416569/b591d589108b487d63)](https://core.telegram.org/file/400780400851/2/6GwDkk6T-aY.416569/b591d589108b487d63)
+[![WebViewColors explained](https://core.telegram.org/file/400780400851/2/6GwDkk6T-aY.416569/b591d589108b487d63)](https://core.telegram.org/file/400780400851/2/6GwDkk6T-aY.416569/b591d589108b487d63)
 
 === storyshareparams | type | h4 | parent=initializing-mini-apps ===
 # StoryShareParams
@@ -580,7 +588,7 @@ This object represents the system-defined safe area insets, providing padding va
 | left | Integer | The left inset in pixels, representing the space to avoid on the left side of the screen. Also available as the CSS variable `var(--tg-safe-area-inset-left)`. |
 | right | Integer | The right inset in pixels, representing the space to avoid on the right side of the screen. Also available as the CSS variable `var(--tg-safe-area-inset-right)`. |
 
-[![](https://core.telegram.org/file/400780400066/1/tTFDI7OC8tE.1374724/9e496dd312c7706a38)](https://core.telegram.org/file/400780400066/1/tTFDI7OC8tE.1374724/9e496dd312c7706a38)
+[![SafeAreaInset explained](https://core.telegram.org/file/400780400066/1/tTFDI7OC8tE.1374724/9e496dd312c7706a38)](https://core.telegram.org/file/400780400066/1/tTFDI7OC8tE.1374724/9e496dd312c7706a38)
 
 === contentsafeareainset | type | h4 | parent=initializing-mini-apps ===
 # ContentSafeAreaInset
@@ -594,7 +602,7 @@ This object represents the content-defined safe area insets, providing padding v
 | left | Integer | The left inset in pixels, representing the space to avoid on the left side of the content area. Also available as the CSS variable `var(--tg-content-safe-area-inset-left)`. |
 | right | Integer | The right inset in pixels, representing the space to avoid on the right side of the content area. Also available as the CSS variable `var(--tg-content-safe-area-inset-right)`. |
 
-[![](https://core.telegram.org/file/400780400676/2/8VT7jCQvpsk.1386608/d249aa072662450345)](https://core.telegram.org/file/400780400676/2/8VT7jCQvpsk.1386608/d249aa072662450345)
+[![ContentSafeAreaInset explained](https://core.telegram.org/file/400780400676/2/8VT7jCQvpsk.1386608/d249aa072662450345)](https://core.telegram.org/file/400780400676/2/8VT7jCQvpsk.1386608/d249aa072662450345)
 
 === backbutton | type | h4 | parent=initializing-mini-apps ===
 # BackButton
@@ -741,7 +749,7 @@ This object provides access to accelerometer data on the device.
 
 All these methods return the [Accelerometer](https://core.telegram.org/bots/webapps#accelerometer) object so they can be chained.
 
-[![](https://core.telegram.org/file/400780400808/3/4R4bxuff6H0.529743/2a9f6212eaed26d194)](https://core.telegram.org/file/400780400808/3/4R4bxuff6H0.529743/2a9f6212eaed26d194)
+[![Accelerometer](https://core.telegram.org/file/400780400808/3/4R4bxuff6H0.529743/2a9f6212eaed26d194)](https://core.telegram.org/file/400780400808/3/4R4bxuff6H0.529743/2a9f6212eaed26d194)
 
 === accelerometerstartparams | type | h4 | parent=initializing-mini-apps ===
 # AccelerometerStartParams
@@ -769,7 +777,7 @@ This object provides access to orientation data on the device.
 
 All these methods return the [DeviceOrientation](https://core.telegram.org/bots/webapps#deviceorientation) object so they can be chained.
 
-[![](https://core.telegram.org/file/400780400662/2/6ziukR8E4pc.4269149/aa2ec0a86b39709a92)](https://core.telegram.org/file/400780400662/2/6ziukR8E4pc.4269149/aa2ec0a86b39709a92)
+[![DeviceOrientation](https://core.telegram.org/file/400780400662/2/6ziukR8E4pc.4269149/aa2ec0a86b39709a92)](https://core.telegram.org/file/400780400662/2/6ziukR8E4pc.4269149/aa2ec0a86b39709a92)
 
 === deviceorientationstartparams | type | h4 | parent=initializing-mini-apps ===
 # DeviceOrientationStartParams
@@ -797,7 +805,7 @@ This object provides access to gyroscope data on the device.
 
 All these methods return the [Gyroscope](https://core.telegram.org/bots/webapps#gyroscope) object so they can be chained.
 
-[![](https://core.telegram.org/file/400780400892/5/GDxCwbAAG7U.579631/7895611bc90a998a13)](https://core.telegram.org/file/400780400892/5/GDxCwbAAG7U.579631/7895611bc90a998a13)
+[![Gyroscope](https://core.telegram.org/file/400780400892/5/GDxCwbAAG7U.579631/7895611bc90a998a13)](https://core.telegram.org/file/400780400892/5/GDxCwbAAG7U.579631/7895611bc90a998a13)
 
 === gyroscopestartparams | type | h4 | parent=initializing-mini-apps ===
 # GyroscopeStartParams
@@ -1168,7 +1176,10 @@ Use these tools to find app-specific issues in your Mini App:
 
 [**Broadcasting to Users**](https://core.telegram.org/bots/webapps#broadcasting-to-users)
 
-[How do I avoid hitting limits?](https://core.telegram.org/bots/webapps#my-bot-is-hitting-limits-how-do-i-avoid-this) [How do I message all my subscribers?](https://core.telegram.org/bots/webapps#how-can-i-message-all-of-my-bot-39s-subscribers-at-once)
+- [How do I avoid hitting limits?](https://core.telegram.org/bots/webapps#my-bot-is-hitting-limits-how-do-i-avoid-this)
+- [How do I message all my subscribers?](https://core.telegram.org/bots/webapps#how-can-i-message-all-of-my-bot-39s-subscribers-at-once)
+
+---
 
 === general-questions | section | h3 | parent=- ===
 # General Questions
@@ -1279,11 +1290,11 @@ Whenever you receive a webhook update, you have two options:
 
 **1. Issue POST to https://api.telegram.org/bot<token>/method**
 
-[![](https://core.telegram.org/file/811140979/3/5p52TWl9X2o/5c6d684ee0d6a4399d)](https://core.telegram.org/file/811140979/3/5p52TWl9X2o/5c6d684ee0d6a4399d)
+[![Confirm and request](https://core.telegram.org/file/811140979/3/5p52TWl9X2o/5c6d684ee0d6a4399d)](https://core.telegram.org/file/811140979/3/5p52TWl9X2o/5c6d684ee0d6a4399d)
 
 **2. Reply directly and give method as JSON payload in the reply**
 
-[![](https://core.telegram.org/file/811140266/2/vGxiVmENAos/6cffad00cbe72be7f2)](https://core.telegram.org/file/811140266/2/vGxiVmENAos/6cffad00cbe72be7f2)
+[![Reply with payload](https://core.telegram.org/file/811140266/2/vGxiVmENAos/6cffad00cbe72be7f2)](https://core.telegram.org/file/811140266/2/vGxiVmENAos/6cffad00cbe72be7f2)
 
 > You may also want to look at our sample [HelloBot](https://core.telegram.org/bots/samples/hellobot), it offers a PHP implementation of this.
 
@@ -1330,6 +1341,8 @@ Enabling [paid broadcasts](https://core.telegram.org/bots/api-changelog#october-
 
 If you do not wish to enable paid broadcasts, consider spreading them over longer intervals (e.g. 8-12 hours) to avoid hitting the limit. The API will not allow bulk notifications to more than ~30 users per second – if you go over that, you'll start getting 429 errors.
 
+---
+
 > If you've got questions that are not answered on this page, ping us at [@BotSupport](https://telegram.me/botsupport) in Telegram.  
 > We welcome any suggestions for the Bot Platform and API.  
 > telegram-login Telegram offers app and website developers **a free and open platform** that lets over **1 billion** users seamlessly **sign up and log in** with their Telegram accounts.
@@ -1348,8 +1361,10 @@ If you do not wish to enable paid broadcasts, consider spreading them over longe
 - **Further integration**  
   You can deliver more services directly via the [Bot API](https://core.telegram.org/bots) and [Mini Apps](https://core.telegram.org/bots/webapps).
 
-> **Note:** This document describes the Telegram Login library and the new [OpenID Connect](https://en.wikipedia.org/wiki/OpenID#OpenID_Connect_(OIDC%29) login flow.  
+> **Note:** This document describes the Telegram Login library and the new [OpenID Connect](<https://en.wikipedia.org/wiki/OpenID#OpenID_Connect_(OIDC%29>) login flow.  
 > The legacy iframe-based JavaScript widget documentation is archived [here](https://core.telegram.org/widgets/login-legacy).
+
+---
 
 === getting-started | section | h3 | parent=- ===
 # Getting Started
@@ -1358,7 +1373,7 @@ Telegram offers a [compact tool](https://core.telegram.org/bots/webapps#using-th
 
 For mobile developers, we also provide ready-to-use **[Native SDKs](https://core.telegram.org/bots/webapps#native-sdks)** for iOS and Android.
 
-Alternatively, Telegram supports the standard [OpenID Connect](https://en.wikipedia.org/wiki/OpenID#OpenID_Connect_(OIDC%29) protocol. This allows you to integrate Telegram authentication into your application using any OIDC-compatible library or authentication platform (e.g., Keycloak, Authentik, Auth0 etc.).
+Alternatively, Telegram supports the standard [OpenID Connect](<https://en.wikipedia.org/wiki/OpenID#OpenID_Connect_(OIDC%29>) protocol. This allows you to integrate Telegram authentication into your application using any OIDC-compatible library or authentication platform (e.g., Keycloak, Authentik, Auth0 etc.).
 
 Our implementation follows the standard [Authorization Code Flow](https://openid.net/specs/openid-connect-core-1_0.html#CodeFlowAuth) with **PKCE** support.
 
@@ -1384,7 +1399,7 @@ To use Telegram Login, you'll need a [**Telegram bot**](https://core.telegram.or
 
 We strongly recommend that the **profile picture** of the bot corresponds with your website's logo, and that the bot's **name** reflects that connection. Users will see a confirmation box similar to the one below when logging in:
 
-[![](https://core.telegram.org/file/400780400680/1/LQAYyWKJXy0.260963.png/8fe2cdf47d8a182740)](https://core.telegram.org/file/400780400680/1/LQAYyWKJXy0.260963.png/8fe2cdf47d8a182740)
+[![Login confirmation box](https://core.telegram.org/file/400780400680/1/LQAYyWKJXy0.260963.png/8fe2cdf47d8a182740)](https://core.telegram.org/file/400780400680/1/LQAYyWKJXy0.260963.png/8fe2cdf47d8a182740)
 
 > Users are much more likely to authorize your app if the bot has a name and logo they recognize and expect. Official services can also [apply for verification](https://telegram.org/verify) from Telegram or [third parties](https://telegram.org/verify#third-party-verification) for greater transparency.
 
@@ -1408,11 +1423,11 @@ Client ID:
 
 Button Style:
 
-Rounded Outlined Icon Shine
+Rounded    Outlined    Icon    Shine
 
 Scopes:
 
-Request Direct Messages Request Phone Number
+Request Direct Messages    Request Phone Number
 
 Embed Code:
 
@@ -1450,6 +1465,8 @@ When the login flow completes, the callback may receive either a success payload
 
 > **Important:** The `telegram-login.js` library relies on communicating with a popup window to complete the authentication flow. If your website serves the `Cross-Origin-Opener-Policy: same-origin` HTTP header, this cross-window communication will be blocked and the login process will fail. To ensure the JavaScript library functions correctly, you must either remove this header or use a more permissive policy, such as `Cross-Origin-Opener-Policy: same-origin-allow-popups`.
 
+---
+
 === native-sdks | section | h3 | parent=- ===
 # Native SDKs
 
@@ -1461,6 +1478,8 @@ If you are building a native mobile application, Telegram provides dedicated SDK
   A native Android library allowing you to seamlessly authenticate users within your Kotlin or Java Android applications.
 
 > **Note:** Complete setup guides, installation instructions, and usage examples for each platform can be found directly in the README files of their respective GitHub repositories.
+
+---
 
 === openid-connect | section | h3 | parent=- ===
 # OpenID Connect
@@ -1515,6 +1534,8 @@ All requested user information is returned directly in the **ID token**. After s
 ```
 
 > Note that Telegram does not currently provide a separate `UserInfo` endpoint. However, some OIDC libraries may expect this endpoint by default, and you may need to **configure them** to skip a separate `userinfo` request.
+
+---
 
 === manual-implementation | section | h3 | parent=- ===
 # Manual Implementation
@@ -1586,5 +1607,7 @@ The `id_token` is a signed JSON Web Token (JWT). Before trusting the user data i
 1. **Fetch Keys:** specific public keys from the [JWKS endpoint](https://oauth.telegram.org/.well-known/jwks.json).
 2. **Verify Signature:** Ensure the token was signed by Telegram.
 3. **Verify Claims:** Check that `iss` is `https://oauth.telegram.org`, `aud` matches your Bot ID, and the token has not expired (`exp`).
+
+---
 
 > Once you have established a connection with the user, you can optionally use your **linked bot** to provide services **directly in the chat interface** via the [Bot API](https://core.telegram.org/bots), or seamlessly offer your **entire web application inside Telegram** using [Mini Apps](https://core.telegram.org/bots/webapps).

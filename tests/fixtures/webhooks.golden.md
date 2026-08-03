@@ -234,7 +234,9 @@ You need a certificate, pick on of these types;
 
 - [A verified, supported certificate](https://core.telegram.org/bots/webhooks#a-verified-supported-certificate)
 - [A self-signed certificate](https://core.telegram.org/bots/webhooks#a-self-signed-certificate)
-- A verified, supported certificate Using a verified certificate means you already have, or will obtain, a certificate backed by a trusted certificate authority (CA). There are many ways to acquire a verified certificate, paid or free. Two popular examples of free suppliers are **StartSSL** and **Let’s Encrypt**. You’re welcome to pick another. Just make sure first the supplier is likely to be supported.  
+- #### A verified, supported certificate
+
+  Using a verified certificate means you already have, or will obtain, a certificate backed by a trusted certificate authority (CA). There are many ways to acquire a verified certificate, paid or free. Two popular examples of free suppliers are **StartSSL** and **Let’s Encrypt**. You’re welcome to pick another. Just make sure first the supplier is likely to be supported.  
   Check [this list](https://packages.ubuntu.com/jammy/all/ca-certificates/filelist) before selecting a CA.  
   Once you’ve picked a CA and validated your identity with them, you can craft your certificate. This frequently starts by generating a CSR (Certificate Signing Request). Generating a CSR is done either through your host machine, or online via the tools provided by the CA.
 - Here is an example (PEM format output).
@@ -308,7 +310,7 @@ Create your CSR and supply the contents of the file to your CA. Most CA’s are 
 `cat yoursigningrequest.csr` **or** `cat yourbotdomainname.csr`  
 Lets you have a look at the CSR we just generated:
 
-[![](https://core.telegram.org/file/811140281/1/5le8eVE7mPk.261973/25ba8c07609aef2310)](https://core.telegram.org/file/811140281/1/5le8eVE7mPk.261973/25ba8c07609aef2310)
+[![csrexample.jpg, 255.83Kb](https://core.telegram.org/file/811140281/1/5le8eVE7mPk.261973/25ba8c07609aef2310)](https://core.telegram.org/file/811140281/1/5le8eVE7mPk.261973/25ba8c07609aef2310)
 
 That doesn’t seem to informative, but we can deduce that the file is in PEM format (ASCII base64 encoded) and contains a certificate signing request. Luckily it is possible to look at the human readable contents of the CSR. Use the following commands to double check if all fields are set correctly.
 
@@ -321,16 +323,16 @@ Verify your CSR and supply it to your CA to get a certificate. We’ll use Start
 
 Go to the certificates wizard, enter the required hostname(s) for your SSL certificate (this is the CN you’ve also set in the CSR and an optional SAN).
 
-[![](https://core.telegram.org/file/811140045/1/wtVcG_IghfI.78937/51e72042b1df5f28b5)](https://core.telegram.org/file/811140045/1/wtVcG_IghfI.78937/51e72042b1df5f28b5)
+[![sslcertwiz.jpg, 77.09Kb](https://core.telegram.org/file/811140045/1/wtVcG_IghfI.78937/51e72042b1df5f28b5)](https://core.telegram.org/file/811140045/1/wtVcG_IghfI.78937/51e72042b1df5f28b5)
 
 In the example above we’ve chosen to set a CN `(test.telegram.org)`, but also a SAN `(sanexample.telegram.org)` The CN given has to match the CN used for generating the CSR.  
 Set your CN (and optional SAN) and copy the contents of the yoursigningrequest.csr file.
 
-[![](https://core.telegram.org/file/811140068/1/5qVIwLYnqd8.116971/87a6da7b70e377f899)](https://core.telegram.org/file/811140068/1/5qVIwLYnqd8.116971/87a6da7b70e377f899)
+[![sslcertwiz1.jpg, 114.23Kb](https://core.telegram.org/file/811140068/1/5qVIwLYnqd8.116971/87a6da7b70e377f899)](https://core.telegram.org/file/811140068/1/5qVIwLYnqd8.116971/87a6da7b70e377f899)
 
 Paste the contents, submit and you’re done.
 
-[![](https://core.telegram.org/file/811140069/2/MVKz66N9t4o.53664/7130b06124c18c9e94)](https://core.telegram.org/file/811140069/2/MVKz66N9t4o.53664/7130b06124c18c9e94)
+[![sslcertwiz2.jpg, 52.41Kb](https://core.telegram.org/file/811140069/2/MVKz66N9t4o.53664/7130b06124c18c9e94)](https://core.telegram.org/file/811140069/2/MVKz66N9t4o.53664/7130b06124c18c9e94)
 
 Now you can download the created certificate directly. In the example used above you’ll receive a zip file with several PEM certificates. The root, intermediate and yourdomain certificate.  
 You need the `intermediate` and `yourdomain` to set a webhook with a StartSSL certificate.
@@ -346,11 +348,13 @@ You can inspect the set of certificates you’ve just downloaded.
     StartSSL supplies certificates in PEM format with a .crt extension, on Windows you can view the contents of them with a quick double click. Extract the files or open the “Otherserver.zip” and double click each of the certificates for inspection. The details tab supplies you with extra information.  
     Make sure you have a correct CN in the `Subject`-field of the `yourdomain`-certificate. If you're using a SAN, make sure that it is listed in the Subject `Alternative Name`-field.
 
-[![](https://core.telegram.org/file/811140010/2/omTlwQW_Wpk.133258/5db0b29d43f5558413)](https://core.telegram.org/file/811140010/2/omTlwQW_Wpk.133258/5db0b29d43f5558413)
+[![wincert.jpg, 130.13Kb](https://core.telegram.org/file/811140010/2/omTlwQW_Wpk.133258/5db0b29d43f5558413)](https://core.telegram.org/file/811140010/2/omTlwQW_Wpk.133258/5db0b29d43f5558413)
 
 With your fresh certificates at hand, you can now continue setting your webhook.
 
-- A self-signed certificate Using a self-signed certificate means you’ll forfeit on the chain of trust backed by a CA. Instead you are the CA. For this to work, a slight difference in setup is required. Because Telegram will have no chain of trust to verify your certificate, you have to use the generated public certificate as an input file when setting the webhook. Keep in mind that the certificate file has to be uploaded as **multipart/form** data in **PEM encoded (ASCII BASE64)** format.
+- #### A self-signed certificate
+
+  Using a self-signed certificate means you’ll forfeit on the chain of trust backed by a CA. Instead you are the CA. For this to work, a slight difference in setup is required. Because Telegram will have no chain of trust to verify your certificate, you have to use the generated public certificate as an input file when setting the webhook. Keep in mind that the certificate file has to be uploaded as **multipart/form** data in **PEM encoded (ASCII BASE64)** format.
 - First let’s generate some certificates:
   - Using OpenSSL:  
     `openssl req -newkey rsa:2048 -sha256 -nodes -keyout YOURPRIVATE.key -x509 -days 365 -out YOURPUBLIC.pem -subj "/C=US/ST=New York/L=Brooklyn/O=Example Brooklyn Company/CN=YOURDOMAIN.EXAMPLE"`  
@@ -468,7 +472,7 @@ If your webhook isn’t working and you’re wondering if the chain is complete:
 
 Here’s an example of a complete chain, note that in this case 2 intermediate certificates have been supplied.
 
-[![](https://core.telegram.org/file/811140157/1/FsbXbc0yPJA.49297/5812f355ecfcda764a)](https://core.telegram.org/file/811140157/1/FsbXbc0yPJA.49297/5812f355ecfcda764a)
+[![startsslexample.jpg, 48.14Kb](https://core.telegram.org/file/811140157/1/FsbXbc0yPJA.49297/5812f355ecfcda764a)](https://core.telegram.org/file/811140157/1/FsbXbc0yPJA.49297/5812f355ecfcda764a)
 
 Even though your browser might not complain when visiting your page, an incomplete chain will not work for your webhook. If your chain is incomplete we have some tips to add them to your current setup:
 
@@ -513,7 +517,8 @@ The end result of all this is a complete certificate chain, backed by either a r
     ```
 
     `--tlsv1.2` will force using TLS1.2.
-  - Message with text using Postman: [![](https://core.telegram.org/file/811140789/2/DmiZPh1t6z0.269328/98525b6835f0a91432)](https://core.telegram.org/file/811140789/2/DmiZPh1t6z0.269328/98525b6835f0a91432)
+  - Message with text using Postman:
+    [![postmanfakeupdate.jpg, 263.02Kb](https://core.telegram.org/file/811140789/2/DmiZPh1t6z0.269328/98525b6835f0a91432)](https://core.telegram.org/file/811140789/2/DmiZPh1t6z0.269328/98525b6835f0a91432)
 - More examples in curl:
   - Message with text:
     ```

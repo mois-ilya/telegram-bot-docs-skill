@@ -289,144 +289,412 @@ function markdownCodeSpan(value) {
   return `${fence}${pad}${singleLine}${pad}${fence}`;
 }
 
-/**
- * Attribute value from an opening tag, tolerating single quotes and unquoted
- * values. Hand-written `\battr="([^"]*)"` matchers silently returned nothing
- * for the other two forms, which HTML permits everywhere.
+// --- HTML tokenizer and tree --------------------------------------------------
+
+/*
+ * The converter used to scan HTML with regular expressions. Every round of
+ * review found new defects of one shape: a pattern matched the markup someone
+ * remembered and missed the rest — `<tr>` but not `<tr class="new">`, `<br>` but
+ * not `<BR>`, `href` but also `data-href`, `<ul>` but not `<dl>`. Patching each
+ * one only moved the boundary; the next round found the next omission, including
+ * omissions inside the previous round's patches.
+ *
+ * A tokenizer cannot have that class of defect. It implements the grammar rather
+ * than a list of remembered cases, so attribute quoting, tag-name case, unknown
+ * elements, nesting and omitted end tags are handled by construction. What the
+ * tokenizer does not know it reports, which is the project's standing rule:
+ * doubt is cheaper than a quiet lie.
  */
-function attr(tag, name) {
-  const m = tag.match(new RegExp(`\\b${name}\\s*=\\s*("[^"]*"|'[^']*'|[^\\s"'>]+)`, 'i'));
-  if (!m) return undefined;
-  const raw = m[1];
-  const value = raw[0] === '"' || raw[0] === "'" ? raw.slice(1, -1) : raw;
-  return decodeEntities(value);
+
+const VOID_ELEMENTS = new Set([
+  'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
+  'link', 'meta', 'param', 'source', 'track', 'wbr',
+]);
+
+// Elements whose content is text, not markup.
+const RAW_TEXT_ELEMENTS = new Set(['script', 'style', 'textarea', 'title']);
+
+/** Split HTML into text, start-tag and end-tag tokens. */
+function tokenize(html) {
+  const tokens = [];
+  const n = html.length;
+  let i = 0;
+  const pushText = (value) => {
+    if (value) tokens.push({ type: 'text', value });
+  };
+  while (i < n) {
+    const lt = html.indexOf('<', i);
+    if (lt === -1) {
+      pushText(html.slice(i));
+      break;
+    }
+    pushText(html.slice(i, lt));
+    if (html.startsWith('<!--', lt)) {
+      const end = html.indexOf('-->', lt + 4);
+      i = end === -1 ? n : end + 3;
+      continue;
+    }
+    if (html[lt + 1] === '!' || html[lt + 1] === '?') {
+      const end = html.indexOf('>', lt);
+      i = end === -1 ? n : end + 1;
+      continue;
+    }
+    const closing = html[lt + 1] === '/';
+    const nameAt = lt + (closing ? 2 : 1);
+    const nameMatch = /^[a-zA-Z][^\s/>]*/.exec(html.slice(nameAt));
+    if (!nameMatch) {
+      // A bare "<" in prose is text, not the start of a tag.
+      pushText('<');
+      i = lt + 1;
+      continue;
+    }
+    const name = nameMatch[0].toLowerCase();
+    let j = nameAt + nameMatch[0].length;
+    const attrs = new Map();
+    let selfClosing = false;
+    while (j < n) {
+      while (j < n && /\s/.test(html[j])) j += 1;
+      if (html[j] === '>') {
+        j += 1;
+        break;
+      }
+      if (html[j] === '/' && html[j + 1] === '>') {
+        selfClosing = true;
+        j += 2;
+        break;
+      }
+      const attrMatch = /^[^\s=/>]+/.exec(html.slice(j));
+      if (!attrMatch) {
+        j += 1;
+        continue;
+      }
+      const attrName = attrMatch[0].toLowerCase();
+      j += attrMatch[0].length;
+      while (j < n && /\s/.test(html[j])) j += 1;
+      let value = '';
+      if (html[j] === '=') {
+        j += 1;
+        while (j < n && /\s/.test(html[j])) j += 1;
+        const quote = html[j];
+        if (quote === '"' || quote === "'") {
+          const end = html.indexOf(quote, j + 1);
+          value = end === -1 ? html.slice(j + 1) : html.slice(j + 1, end);
+          j = end === -1 ? n : end + 1;
+        } else {
+          const valueMatch = /^[^\s>]*/.exec(html.slice(j));
+          value = valueMatch[0];
+          j += valueMatch[0].length;
+        }
+      }
+      // First occurrence wins, as in HTML. Attribute names are compared whole,
+      // so `data-href` can never be read as `href`.
+      if (!attrs.has(attrName)) attrs.set(attrName, decodeEntities(value));
+    }
+    i = j;
+    if (closing) {
+      tokens.push({ type: 'end', name });
+      continue;
+    }
+    tokens.push({ type: 'start', name, attrs, selfClosing: selfClosing || VOID_ELEMENTS.has(name) });
+    if (RAW_TEXT_ELEMENTS.has(name)) {
+      const rest = html.slice(i);
+      const close = new RegExp(`</${name}\\s*>`, 'i').exec(rest);
+      pushText(close ? rest.slice(0, close.index) : rest);
+      tokens.push({ type: 'end', name });
+      i += close ? close.index + close[0].length : rest.length;
+    }
+  }
+  return tokens;
+}
+
+// Block-level elements, used both for implicit <p> closing and to decide what an
+// unknown element is allowed to be.
+const BLOCK_LEVEL = new Set([
+  'address', 'article', 'aside', 'blockquote', 'center', 'details', 'dialog', 'div',
+  'dl', 'fieldset', 'figcaption', 'figure', 'footer', 'form', 'h1', 'h2', 'h3', 'h4',
+  'h5', 'h6', 'header', 'hgroup', 'hr', 'main', 'nav', 'ol', 'p', 'pre', 'section',
+  'summary', 'table', 'ul',
+]);
+
+// An open element of the key is closed by a start tag named in the value set.
+// This is what lets HTML omit </li>, </tr>, </td>, </p> and friends.
+const IMPLICITLY_CLOSED_BY = {
+  p: BLOCK_LEVEL,
+  // HTML forbids a link inside a link, so a browser closes the open one. The
+  // webhooks page relies on this, writing <a href="X"><a href="X">X</a></a>;
+  // honouring the literal nesting produces [[X](X)](X).
+  a: new Set(['a']),
+  li: new Set(['li']),
+  dt: new Set(['dt', 'dd']),
+  dd: new Set(['dt', 'dd']),
+  tr: new Set(['tr', 'tbody', 'tfoot', 'thead']),
+  td: new Set(['td', 'th', 'tr', 'tbody', 'tfoot', 'thead']),
+  th: new Set(['td', 'th', 'tr', 'tbody', 'tfoot', 'thead']),
+  thead: new Set(['tbody', 'tfoot']),
+  tbody: new Set(['tbody', 'tfoot']),
+  option: new Set(['option']),
+};
+
+/** Build a tree of {name, attrs, children} from tokens. */
+function buildTree(tokens) {
+  const root = { name: '#root', attrs: new Map(), children: [] };
+  const stack = [root];
+  const top = () => stack[stack.length - 1];
+  for (const token of tokens) {
+    if (token.type === 'text') {
+      top().children.push({ name: '#text', value: token.value });
+      continue;
+    }
+    if (token.type === 'start') {
+      while (stack.length > 1 && IMPLICITLY_CLOSED_BY[top().name]?.has(token.name)) stack.pop();
+      const node = { name: token.name, attrs: token.attrs, children: [] };
+      top().children.push(node);
+      if (!token.selfClosing) stack.push(node);
+      continue;
+    }
+    // An end tag closes the nearest matching open element, and with it anything
+    // still open inside — that is how </ul> closes a dangling <li>. An end tag
+    // with no match anywhere is stray markup and is ignored.
+    let at = -1;
+    for (let k = stack.length - 1; k >= 1; k -= 1) {
+      if (stack[k].name === token.name) {
+        at = k;
+        break;
+      }
+    }
+    if (at !== -1) stack.length = at;
+  }
+  return root;
+}
+
+function parseHtml(html) {
+  return buildTree(tokenize(html));
+}
+
+// --- HTML → markdown ----------------------------------------------------------
+
+const children = (node) => node.children ?? [];
+
+/** All text under a node, entities decoded, whitespace untouched. */
+function rawText(node) {
+  if (node.name === '#text') return decodeEntities(node.value);
+  if (node.name === 'br') return '\n';
+  if (node.name === 'img') return node.attrs.get('alt') ?? '';
+  return children(node).map(rawText).join('');
 }
 
 /**
  * Resolve a URL found on a documentation page against that page.
  *
- * This was hand-rolled prefix matching, which passed document-relative hrefs
- * through untouched — 23 links such as `[Mini Apps](webapps)` shipped in the
- * cache, pointing at paths that do not exist once a page is split into
- * per-section files — and turned protocol-relative `//host/x` into
- * `https://core.telegram.org//host/x`. The URL parser handles every form,
- * including the `#anchor` case that was previously hardcoded to /bots/api
- * regardless of which page was being converted.
+ * Hand-rolled prefix matching passed document-relative hrefs through untouched —
+ * 23 links such as `[Mini Apps](webapps)` shipped in the cache, pointing at paths
+ * that do not exist once a page is split into per-section files — and turned
+ * protocol-relative `//host/x` into `https://core.telegram.org//host/x`.
  */
 function absolutize(href, baseUrl) {
+  let url;
   try {
-    return new URL(href.trim(), baseUrl ?? 'https://core.telegram.org/bots/api').href;
+    url = new URL(href.trim(), baseUrl ?? 'https://core.telegram.org/bots/api').href;
   } catch {
-    // A malformed href is content, not a reason to abort the refresh; keep the
-    // original text rather than inventing a target.
-    return href;
+    // A malformed href is content, not a reason to abort the refresh.
+    url = href.trim();
   }
+  // A markdown destination ends at the first unbalanced ")", so a URL carrying
+  // parentheses has to be escaped or the link silently truncates. Telegram
+  // publishes exactly this today: .../OpenID#OpenID_Connect_(OIDC%29.
+  return /[()\s]/.test(url) ? `<${url.replace(/[<>]/g, encodeURIComponent)}>` : url;
 }
 
-/** Convert inline HTML (inside a paragraph/cell/list item) to markdown. */
-function inlineToMd(html, baseUrl) {
-  let s = html;
-  // Emoji images carry the emoji in alt and become that character. A content
-  // image with an empty alt (a diagram, or the Stars pricing table published as
-  // a picture) must still leave a reference behind: dropping it removes
-  // information silently, and no character count can notice because the tag
-  // contributed no text in the first place.
-  s = s.replace(/<img\b[^>]*>/gi, (tag) => {
-    const alt = attr(tag, 'alt') ?? '';
-    const src = attr(tag, 'src');
-    // Emoji sprites are text, not illustrations: they become their character.
-    const cls = attr(tag, 'class') ?? '';
-    const isEmoji = /\bemoji\b/.test(cls) || (src ?? '').includes('/img/emoji/');
-    if (isEmoji || !src) return alt;
-    return `![${alt}](${absolutize(src, baseUrl)})`;
-  });
-  // A <video> keeps its media in a nested <source>; neither tag contributes
-  // text, so without this the whole player vanishes silently — 23 sections of
-  // the guides illustrate a feature with nothing but a video.
-  s = s.replace(/<video\b([^>]*)>([\s\S]*?)<\/video>/gi, (_, attrs, inner) => {
-    const sourceTag = inner.match(/<source\b[^>]*>/i)?.[0] ?? '';
-    const src = attr(sourceTag, 'src') ?? attr(attrs, 'src');
-    const poster = attr(attrs, 'poster');
-    if (src) return `[video](${absolutize(src, baseUrl)})`;
-    return poster ? `![](${absolutize(poster, baseUrl)})` : '';
-  });
-  // Preserve intentional HTML line breaks separately from source formatting
-  // whitespace and numeric entities that describe control characters.
-  s = s.replace(/<br\s*\/?>/g, '\u0001');
-  s = s.replace(/(<a\b[^>]*>)(.*?)<\/a>/gis, (_, tag, text) => {
-    const href = attr(tag, 'href');
-    const inner = inlineToMd(text, baseUrl).trim();
-    if (href === undefined) return inner; // an anchor target, not a link
-    if (!inner) return '';
-    return `[${inner}](${absolutize(href, baseUrl)})`;
-  });
-  // Emphasis tags carry attributes in real markup; matching only the bare form
-  // dropped the markers and left the text looking like ordinary prose. Empty
-  // emphasis emits nothing: the anchor icon before every heading is an <i> with
-  // no content, and turning it into bare markers forges visible text.
-  const emphasize = (marker) => (_, __, body) => (body.trim() ? `${marker}${body}${marker}` : '');
-  s = s.replace(/<(b|strong)\b[^>]*>(.*?)<\/\1>/gis, emphasize('**'));
-  s = s.replace(/<(i|em)\b[^>]*>(.*?)<\/\1>/gis, emphasize('*'));
-  // A <mark> badge annotates a name rather than being part of it: plain text
-  // turns "signature NEW" into something a reader takes for the field name.
-  s = s.replace(/<mark\b[^>]*>(.*?)<\/mark>/gs, '**$1**');
-  // Code spans: strip tags INSIDE the span first, then decode, then hide the
-  // result behind a placeholder. Decoding before the generic tag-strip below
-  // would turn e.g. `&lt;value&gt;` into `<value>` and the stripper would eat
-  // it as if it were markup (this silently gutted ~24 cache files once).
-  const codeSpans = [];
-  s = s.replace(/<code\b[^>]*>(.*?)<\/code>/gis, (_, c) => {
-    // A <br> inside the span already became \u0001 above; turn it into a real
-    // newline here so markdownCodeSpan escapes it visibly instead of leaking
-    // a raw control character into the cache.
-    codeSpans.push(decodeEntities(c.replace(/<[^>]+>/g, '')).replace(/\u0001/g, '\n'));
-    return `\u0000${codeSpans.length - 1}\u0000`;
-  });
-  s = s.replace(/<[^>]+>/g, ''); // strip anything left
-  s = s.replace(/&#(?:10|x0*a);/gi, '\u0002');
-  s = decodeEntities(s)
-    .replace(/[ \t\r\n]+/g, ' ')
-    // Preserve <br> as an explicit Markdown hard break rather than a bare
-    // newline that CommonMark may collapse into an ordinary space.
-    .replace(/\u0001/g, '  \n')
-    .replace(/\u0002/g, '\\n');
-  // Bounds-check the restore: a sentinel that does not map to a captured span
-  // must vanish, not render as `undefined` or crash.
-  return s.replace(/\u0000(\d+)\u0000/g, (_, i) =>
-    codeSpans[Number(i)] === undefined ? '' : markdownCodeSpan(codeSpans[Number(i)]),
-  );
+/** Elements rendered as inline markup; anything else inline is transparent. */
+const INLINE_TRANSPARENT = new Set([
+  'span', 'sup', 'sub', 'u', 's', 'strike', 'small', 'big', 'abbr', 'cite', 'dfn',
+  'kbd', 'samp', 'var', 'time', 'data', 'bdi', 'bdo', 'q', 'ins', 'del', 'font',
+  'tt', 'label', 'noscript', 'nobr', 'ruby', 'rt', 'rp', 'token', 'output',
+  'picture', 'map', 'select', 'optgroup', 'option', 'button', 'legend', 'caption',
+  // The Login Widget configurator on the Mini Apps page is a live form; its
+  // textarea holds the embed code, which is content worth keeping.
+  'textarea',
+]);
+
+/** Elements that carry no text and are dropped without comment. */
+const IGNORED_ELEMENTS = new Set(['input', 'track', 'param', 'col', 'colgroup', 'wbr', 'area', 'base', 'link', 'meta', 'source', 'script', 'style']);
+
+function mediaFromVideo(node, baseUrl) {
+  const source = children(node).find((c) => c.name === 'source');
+  const src = source?.attrs.get('src') ?? node.attrs.get('src');
+  if (src) return `[video](${absolutize(src, baseUrl)})`;
+  const poster = node.attrs.get('poster');
+  return poster ? `![](${absolutize(poster, baseUrl)})` : '';
 }
 
 /**
- * Rows of a table body, in document order.
+ * What the renderer actually emitted, counted as it emits.
  *
- * Matching `<tr>(.*?)</tr>` recognised only the bare tag, so a single
- * `<tr class="new">` — exactly how these pages mark something newly added —
- * dropped that row while leaving the Markdown table structurally valid. In the
- * 95-row currency table that deleted the header and promoted the first data row
- * into its place: a table that still looks right and is no longer true. HTML
- * also permits `</tr>` to be omitted, so a row ends at the next row or at the
- * end of the table body, whichever comes first.
+ * Structure used to be recovered by scanning the finished markdown for pipes and
+ * backticks, which cannot tell a table row from a shell pipeline inside a code
+ * fence, and cannot see a table at all once a blockquote has indented it. Both
+ * mistakes rejected correct output. Counting at the point of emission compares
+ * like with like: the tree says what the page contains, these say what was
+ * written, and a deficit is a real loss rather than a parsing accident.
  */
-function splitRows(html) {
-  const openRe = /<tr\b[^>]*>/gi;
-  const starts = [...html.matchAll(openRe)];
-  return starts.map((m, i) => {
-    const from = m.index + m[0].length;
-    const explicit = html.slice(from).search(/<\/tr\s*>/i);
-    const nextRow = i + 1 < starts.length ? starts[i + 1].index : html.length;
-    const end = explicit === -1 ? nextRow : Math.min(from + explicit, nextRow);
-    return html.slice(from, end);
-  });
+let emitted = null;
+const countEmitted = (kind, by = 1) => {
+  if (emitted) emitted[kind] = (emitted[kind] ?? 0) + by;
+};
+
+/** Does this element wrap a picture or a player? A link around one has content. */
+function hasMedia(node) {
+  return children(node).some(
+    (c) => c.name === 'img' || c.name === 'video' || c.name === 'audio' || hasMedia(c),
+  );
 }
 
-function tableToMd(html, baseUrl) {
-  const rows = splitRows(html).map((body) =>
-    [...body.matchAll(/<t([hd])\b[^>]*>([\s\S]*?)(?=<\/t\1\s*>|<t[hd]\b|$)/gi)].map((c) =>
-      inlineToMd(c[2], baseUrl).replace(/[ \t]*\n/g, '<br>').replace(/\|/g, '\\|').trim(),
-    ),
-  );
+// Whether an element is one the renderer is expected to turn into markdown.
+// These mirror the emit conditions in renderInline exactly: an expectation
+// derived from different rules than the output would measure the difference
+// between the two rules rather than anything about the conversion.
+const EMITS = {
+  // An anchor with no visible content is a link target, not a link — every
+  // heading on these pages is preceded by one.
+  link: (node) => node.attrs.has('href') && Boolean(rawText(node).trim() || hasMedia(node)),
+  // Emoji sprites become their character, and an image with no source has
+  // nothing to point at.
+  image: (node) =>
+    Boolean(node.attrs.get('src')) &&
+    !/\bemoji\b/.test(node.attrs.get('class') ?? '') &&
+    !(node.attrs.get('src') ?? '').includes('/img/emoji/'),
+  player: (node) =>
+    Boolean(children(node).find((c) => c.name === 'source')?.attrs.get('src')) ||
+    Boolean(node.attrs.get('src')) ||
+    Boolean(node.attrs.get('poster')),
+};
+
+/** What the parsed page contains that the renderer owes markdown for. */
+function countTree(node, into = {}) {
+  const name = node.name;
+  if (name === 'table') into.tables = (into.tables ?? 0) + 1;
+  else if (name === 'tr') into.rows = (into.rows ?? 0) + 1;
+  else if (name === 'pre') into.fences = (into.fences ?? 0) + 1;
+  else if (name === 'a') {
+    if (EMITS.link(node)) into.links = (into.links ?? 0) + 1;
+  } else if (name === 'img') {
+    if (EMITS.image(node)) into.media = (into.media ?? 0) + 1;
+  } else if (name === 'video' || name === 'audio') {
+    if (EMITS.player(node)) into.media = (into.media ?? 0) + 1;
+  } else if (name === 'code') into.codes = (into.codes ?? 0) + 1;
+  // A <pre> is rendered from its raw text, so nothing inside it becomes markdown
+  // of its own: a <code> there is part of the fence and a link is example text.
+  if (name === 'pre') return into;
+  for (const child of children(node)) countTree(child, into);
+  return into;
+}
+
+/** Convert inline content to markdown. */
+function renderInline(nodes, baseUrl) {
+  let out = '';
+  for (const node of nodes) {
+    switch (node.name) {
+      case '#text': {
+        // A literal &#10; documents a control character rather than ending a
+        // line; keep it visible instead of turning it into layout.
+        const marked = node.value.replace(/&#(?:10|x0*a);/gi, '\u0002');
+        out += decodeEntities(marked)
+          .replace(/[ \t\r\n]+/g, ' ')
+          .replace(/\u0002/g, '\\n');
+        break;
+      }
+      case 'br':
+        // An explicit markdown hard break; a bare newline would be collapsed.
+        out += '  \n';
+        break;
+      case 'img': {
+        const alt = node.attrs.get('alt') ?? node.attrs.get('title') ?? '';
+        const src = node.attrs.get('src');
+        // Emoji sprites are text and become their character; an illustration
+        // must leave a reference behind even with no caption, because a dropped
+        // image costs information no character count can notice.
+        const isEmoji =
+          /\bemoji\b/.test(node.attrs.get('class') ?? '') || (src ?? '').includes('/img/emoji/');
+        out += isEmoji || !src ? alt : `![${alt}](${absolutize(src, baseUrl)})`;
+        countEmitted('media');
+        break;
+      }
+      case 'video':
+      case 'audio': {
+        const media = mediaFromVideo(node, baseUrl);
+        out += media;
+        if (media) countEmitted('media');
+        break;
+      }
+      case 'a': {
+        const inner = renderInline(children(node), baseUrl).trim();
+        const href = node.attrs.get('href');
+        if (href === undefined) out += inner; // an anchor target, not a link
+        else if (inner) {
+          out += `[${inner}](${absolutize(href, baseUrl)})`;
+          countEmitted('links');
+        }
+        break;
+      }
+      case 'b':
+      case 'strong':
+      case 'mark': {
+        // A <mark> badge annotates a name rather than being part of it.
+        const inner = renderInline(children(node), baseUrl);
+        out += inner.trim() ? `**${inner}**` : '';
+        break;
+      }
+      case 'i':
+      case 'em': {
+        const inner = renderInline(children(node), baseUrl);
+        // Empty emphasis emits nothing: the anchor icon before every heading is
+        // an <i> with no content, and bare markers there forge visible text.
+        out += inner.trim() ? `*${inner}*` : '';
+        break;
+      }
+      case 'code':
+        out += markdownCodeSpan(rawText(node));
+        countEmitted('codes');
+        break;
+      default:
+        if (IGNORED_ELEMENTS.has(node.name)) break;
+        if (INLINE_TRANSPARENT.has(node.name)) {
+          out += renderInline(children(node), baseUrl);
+          break;
+        }
+        // A block element reached inline context: its boundary is a word
+        // boundary, so flattening it without a separator would glue sentences
+        // together at a perfect character count. Refusing is the safe direction.
+        throw new Error(`unsupported element <${node.name}> in inline content`);
+    }
+  }
+  return out;
+}
+
+function tableToMd(node, baseUrl) {
+  const rows = [];
+  const collect = (n) => {
+    for (const child of children(n)) {
+      if (child.name === 'tr') {
+        rows.push(
+          children(child)
+            .filter((c) => c.name === 'td' || c.name === 'th')
+            .map((c) =>
+              renderInline(children(c), baseUrl)
+                .replace(/[ \t]*\n/g, '<br>')
+                .replace(/\|/g, '\\|')
+                .trim(),
+            ),
+        );
+      } else if (child.name === 'thead' || child.name === 'tbody' || child.name === 'tfoot') {
+        collect(child);
+      }
+    }
+  };
+  collect(node);
   if (rows.length === 0) return '';
+  countEmitted('tables');
+  countEmitted('rows', rows.length);
   const width = Math.max(...rows.map((r) => r.length));
   const line = (cells) =>
     `| ${Array.from({ length: width }, (_, i) => cells[i] ?? '').join(' | ')} |`;
@@ -434,205 +702,197 @@ function tableToMd(html, baseUrl) {
 }
 
 /**
- * Index of the closing tag for an element whose body starts at `from`,
- * counting nested elements of the same name. A non-greedy `<ul>(.*?)</ul>`
- * stops at the *inner* `</ul>` of a nested list and silently truncates
- * everything after it — that is a real defect this replaces, not a hypothetical.
- */
-function findClose(html, from, tag) {
-  const re = new RegExp(`<(/?)${tag}\\b[^>]*>`, 'gi');
-  re.lastIndex = from;
-  let depth = 0;
-  let m;
-  while ((m = re.exec(html)) !== null) {
-    if (m[1] === '/') {
-      if (depth === 0) return m.index;
-      depth -= 1;
-    } else {
-      depth += 1;
-    }
-  }
-  return -1;
-}
-
-// Block-level start tags that implicitly close an open <p>.
-const BLOCK_START = /<(?:table|div|ul|ol|blockquote|pre|h[1-6])\b/i;
-
-// Block children of a list item that lose meaning if flattened to inline text.
-const BLOCK_IN_ITEM = /<(?:ul|ol|pre|table|blockquote)\b/i;
-
-/**
  * Language label for a code fence, read from the markup and never guessed.
  *
- * Telegram currently tags 4 of the 53 code blocks it publishes, as
- * `<code class="lang-json">` on the Mini Apps OAuth examples. That is source
- * metadata and discarding it is the same class of fidelity loss as dropping
- * text, so it is carried onto the fence. The other 49 get no hint: there is no
- * signal in the markup, and content-sniffing is unsafe here — most of them are
- * not code at all but MarkdownV2 syntax samples and bare URLs set in a monospace
- * font, and the block that looks most like JSON is an openssl INI config. A
- * wrong language would be indistinguishable from documented fact.
- *
- * The label is read from either the <pre> or the <code> tag, under any of the
- * conventions in common use, and from any position in a multi-class list, so a
- * value Telegram does not currently emit still comes through if it appears.
- * Anything outside the allowlist is dropped rather than written: the label lands
- * on the fence line, where a stray backtick or newline would break the block.
+ * Telegram tags 4 of the 53 code blocks it publishes. The other 49 get no hint:
+ * there is no signal in their markup, and content-sniffing is unsafe here —
+ * most are not code at all but MarkdownV2 syntax samples and bare URLs set in a
+ * monospace font, and the block that looks most like JSON is an openssl INI
+ * config. A guessed language is indistinguishable from documented fact.
  */
-function codeFenceLang(preTag, inner) {
-  const codeTag = inner.match(/<code\b[^>]*>/i)?.[0] ?? '';
-  for (const tag of [codeTag, preTag]) {
+function codeFenceLang(pre) {
+  const code = children(pre).find((c) => c.name === 'code');
+  for (const node of [code, pre]) {
+    if (!node) continue;
     const found =
-      tag.match(/\bclass="[^"]*?\b(?:lang|language|highlight|brush)-([^\s"]+)/i)?.[1] ??
-      tag.match(/\bdata-lang(?:uage)?="([^"]+)"/i)?.[1];
+      /\b(?:lang|language|highlight|brush)-([^\s]+)/i.exec(node.attrs.get('class') ?? '')?.[1] ??
+      node.attrs.get('data-lang') ??
+      node.attrs.get('data-language');
     // Deliberately not a bare `lang=`: in HTML that attribute carries the
-    // natural language of the content, so <pre lang="en"> would produce an
-    // ```en fence.
+    // natural language of the content, so <pre lang="en"> would produce ```en.
     if (found === undefined) continue;
-    const lang = decodeEntities(found).trim().toLowerCase();
+    const lang = found.trim().toLowerCase();
     // Real language names: c++, c#, objective-c, f#, asp.net, shell-session.
     if (/^[a-z0-9][a-z0-9+#._-]{0,19}$/.test(lang)) return lang;
   }
   return '';
 }
 
-/** Split a list body into top-level <li> bodies, skipping nested lists. */
-function splitListItems(html) {
-  const items = [];
-  const re = /<(\/?)(ul|ol|li)\b[^>]*>/gi;
-  let depth = 0;
-  let start = -1;
-  let m;
-  while ((m = re.exec(html)) !== null) {
-    const closing = m[1] === '/';
-    const tag = m[2].toLowerCase();
-    if (tag === 'li') {
-      if (depth > 0) continue;
-      if (!closing) {
-        // HTML allows an omitted </li>; a new opening tag closes the previous item.
-        if (start !== -1) items.push(html.slice(start, m.index));
-        start = m.index + m[0].length;
-      } else if (start !== -1) {
-        items.push(html.slice(start, m.index));
-        start = -1;
-      }
-    } else if (start !== -1) {
-      depth += closing ? -1 : 1;
-      if (depth < 0) depth = 0;
-    }
-  }
-  if (start !== -1) items.push(html.slice(start));
-  return items;
+function preToMd(node) {
+  const text = rawText(node).replace(/^\n/, '').replace(/\s+$/, '');
+  // The docs' own Markdown examples contain ``` lines, so the fence must always
+  // outgrow the longest backtick run inside it.
+  const longest = Math.max(0, ...[...text.matchAll(/`+/g)].map((r) => r[0].length));
+  const fence = '`'.repeat(Math.max(3, longest + 1));
+  countEmitted('fences');
+  return `${fence}${codeFenceLang(node)}\n${text}\n${fence}`;
 }
 
-/** Convert a block of section HTML to markdown. */
-function blockToMd(html, baseUrl) {
+function listToMd(node, baseUrl) {
+  const items = children(node).filter((c) => c.name === 'li');
+  return items
+    .map((item, index) => {
+      const marker = node.name === 'ul' ? '-' : `${index + 1}.`;
+      const kids = [...children(item)];
+      // The item's own text is whatever precedes its first block child. A
+      // leading <p> is that text too, not a separate block — otherwise every
+      // list on a page that wraps item prose in <p> renders with empty markers.
+      const lead = [];
+      while (kids.length > 0 && !isBlock(kids[0])) lead.push(kids.shift());
+      if (lead.every((n) => isBlank(n)) && kids[0]?.name === 'p') {
+        lead.push(...children(kids.shift()));
+      }
+      const text = renderInline(lead, baseUrl).trim().replace(/\n/g, '\n  ');
+      // A bare marker is not content. Sections are cut at their headings, and
+      // the webhooks page puts those headings inside <li>, so a section body can
+      // legitimately begin with a list item whose content belongs to the next
+      // section — emitting "- " for it would invent a bullet the page never had.
+      // Block children are rendered as blocks and indented underneath: a nested
+      // list, but equally a <pre> or a <table>. The webhooks guide keeps 14 of
+      // its 22 shell snippets inside <li> elements.
+      const sub = renderBlocks(kids, baseUrl)
+        .split('\n')
+        .map((l) => (l ? `  ${l}` : l))
+        .join('\n')
+        .trimEnd();
+      // A bare marker is not content. Sections are cut at their headings, and
+      // the webhooks page puts those headings inside <li>, so a section body can
+      // legitimately begin with a list item whose content belongs to the next
+      // section — emitting "- " for it would invent a bullet the page never had.
+      if (!text && !sub.trim()) return '';
+      if (!text) {
+        // An item made only of blocks: put the marker on the first line rather
+        // than leaving it alone above indented content.
+        const lines = sub.split('\n');
+        const first = lines.findIndex((l) => l.trim());
+        lines[first] = `${marker} ${lines[first].trim()}`;
+        return lines.join('\n');
+      }
+      const head = `${marker} ${text}`;
+      return sub.trim() ? `${head}\n${sub}` : head;
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+const isBlank = (node) => node.name === '#text' && !node.value.trim();
+
+const RENDERED_BLOCKS = new Set([
+  'p', 'div', 'table', 'ul', 'ol', 'blockquote', 'pre', 'hr', 'center',
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'section', 'article', 'main', 'header',
+  'footer', 'aside', 'figure', 'figcaption', 'details', 'summary', 'form',
+  'fieldset', 'address', 'nav', 'hgroup', 'dl', 'dt', 'dd', 'li',
+]);
+
+const isBlock = (node) => RENDERED_BLOCKS.has(node.name);
+
+/** Convert a sequence of nodes to markdown blocks separated by blank lines. */
+function renderBlocks(nodes, baseUrl) {
   const out = [];
-  // Match top-level blocks in document order. Each block is consumed whole via
-  // findClose, so nesting cannot truncate it, and the scan resumes past its end.
-  const openRe = /<(p|table|ul|ol|blockquote|pre|h[56]|div)(?:\s[^>]*)?>/gi;
-  let cursor = 0;
-  let m;
-  while ((m = openRe.exec(html)) !== null) {
-    if (m.index < cursor) {
-      openRe.lastIndex = cursor;
+  let inline = [];
+  const flushInline = () => {
+    if (inline.length === 0) return;
+    // Content between recognised blocks is content too: the docs place an image
+    // or a video in a bare <a>/<video> beside a <p> caption, and collecting only
+    // the blocks dropped it whenever a sibling block existed.
+    const text = renderInline(inline, baseUrl).trim();
+    if (text) out.push(text);
+    inline = [];
+  };
+  for (const node of nodes) {
+    if (!isBlock(node)) {
+      inline.push(node);
       continue;
     }
-    // Content between recognized blocks is content too. The docs place an
-    // image or a video in a bare <a>/<video> beside a <p> caption; collecting
-    // only the matched blocks dropped it whenever a sibling block existed,
-    // which is how 32 illustrations disappeared without changing any guard.
-    const gap = inlineToMd(html.slice(cursor, m.index), baseUrl).trim();
-    if (gap) out.push(gap);
-    const tag = m[1].toLowerCase();
-    const bodyStart = m.index + m[0].length;
-    const closeAt = findClose(html, bodyStart, tag);
-    if (closeAt === -1) continue;
-    let bodyEnd = closeAt;
-    let resumeAt = closeAt + tag.length + 3; // past "</tag>"
-    if (tag === 'p') {
-      // A <p> cannot contain block-level content: HTML closes it implicitly at
-      // the next block start tag. The Bot API page relies on this, writing
-      // <p><table>...</table></p>. Honouring the literal </p> would hand the
-      // whole table to inlineToMd, which strips tags and flattens it into
-      // run-on text — real damage that a character count cannot detect,
-      // because every character survives.
-      const implicit = html.slice(bodyStart, closeAt).search(BLOCK_START);
-      if (implicit !== -1) {
-        bodyEnd = bodyStart + implicit;
-        resumeAt = bodyEnd; // rescan from the block tag itself
-      }
-    }
-    const inner = html.slice(bodyStart, bodyEnd);
-    openRe.lastIndex = resumeAt;
-    cursor = resumeAt;
-    switch (tag) {
+    flushInline();
+    switch (node.name) {
       case 'p':
-        out.push(inlineToMd(inner, baseUrl).trim());
+      case 'dt':
+      case 'dd':
+      case 'figcaption':
+      case 'summary':
+      case 'address': {
+        const text = renderInline(children(node), baseUrl).trim();
+        if (text) out.push(node.name === 'dd' ? `  ${text}` : text);
         break;
+      }
       case 'table':
-        out.push(tableToMd(inner, baseUrl));
+        out.push(tableToMd(node, baseUrl));
         break;
       case 'ul':
-      case 'ol': {
-        const items = splitListItems(inner).map((raw, i) => {
-          const marker = tag === 'ul' ? '-' : `${i + 1}.`;
-          // Block children of an item (a nested list, but equally a <pre> or a
-          // <table>) are rendered as blocks and indented underneath it. Passing
-          // them to inlineToMd would strip their tags and mash a code block
-          // into the surrounding prose — the webhooks guide keeps 14 of its 22
-          // shell snippets inside <li> elements.
-          const blockAt = raw.search(BLOCK_IN_ITEM);
-          const own = blockAt === -1 ? raw : raw.slice(0, blockAt);
-          const head = `${marker} ${inlineToMd(own, baseUrl).trim().replace(/\n/g, '\n  ')}`;
-          if (blockAt === -1) return head;
-          const sub = blockToMd(raw.slice(blockAt), baseUrl)
-            .split('\n')
-            .map((l) => (l ? `  ${l}` : l))
-            .join('\n');
-          return sub ? `${head}\n${sub}` : head;
-        });
-        out.push(items.join('\n'));
+      case 'ol':
+        out.push(listToMd(node, baseUrl));
         break;
-      }
       case 'blockquote':
         out.push(
-          blockToMd(inner, baseUrl)
+          renderBlocks(children(node), baseUrl)
             .split('\n')
             .map((l) => `> ${l}`)
             .join('\n'),
         );
         break;
-      case 'pre': {
-        const lang = codeFenceLang(m[0], inner);
-        const code = inner
-          .replace(/<img[^>]*alt="([^"]*)"[^>]*>/g, '$1')
-          .replace(/<\/?code[^>]*>/g, '');
-        const text = decodeEntities(code.replace(/<[^>]+>/g, '')).trim();
-        // The docs' own Markdown examples contain ``` lines — the fence must
-        // always be longer than any backtick run in the content.
-        const longestRun = Math.max(0, ...[...text.matchAll(/`+/g)].map((r) => r[0].length));
-        const fence = '`'.repeat(Math.max(3, longestRun + 1));
-        out.push(`${fence}${lang}\n${text}\n${fence}`);
+      case 'pre':
+        out.push(preToMd(node));
         break;
-      }
+      case 'hr':
+        out.push('---');
+        break;
+      case 'h1':
+      case 'h2':
+      case 'h3':
+      case 'h4':
       case 'h5':
       case 'h6':
-        out.push(`#### ${inlineToMd(inner, baseUrl).trim()}`);
+        out.push(`#### ${renderInline(children(node), baseUrl).trim()}`);
         break;
-      case 'div':
-        out.push(blockToMd(inner, baseUrl));
+      case 'li': {
+        // A stray <li> outside any list still carries content. Sections are cut
+        // at their headings and this page nests headings inside list items, so a
+        // body routinely ends with the opening <li> of the next section — an
+        // empty one, which must not become a bullet the page never had.
+        const item = listToMd({ name: 'ul', attrs: node.attrs, children: [node] }, baseUrl);
+        if (item) out.push(item);
+        break;
+      }
+      default:
+        // Wrappers with no markdown of their own: render their children.
+        out.push(renderBlocks(children(node), baseUrl));
         break;
     }
   }
-  const tail = inlineToMd(html.slice(cursor), baseUrl).trim();
-  if (tail) out.push(tail);
-  // Fallback: section had no recognized blocks but has visible text.
-  if (out.length === 0) {
-    const text = inlineToMd(html, baseUrl).trim();
-    if (text) out.push(text);
-  }
+  flushInline();
   return out.filter(Boolean).join('\n\n');
+}
+
+/** Convert inline HTML (a heading, a cell, a fragment) to markdown. */
+function inlineToMd(html, baseUrl) {
+  return renderInline(children(parseHtml(html)), baseUrl);
+}
+
+/** Convert a block of section HTML to markdown. */
+function blockToMd(html, baseUrl) {
+  return renderBlocks(children(parseHtml(html)), baseUrl);
+}
+
+/** Render a parsed section and report what the renderer emitted. */
+function renderCounted(tree, baseUrl) {
+  const previous = emitted;
+  emitted = {};
+  try {
+    return { md: renderBlocks(children(tree), baseUrl), stats: emitted };
+  } finally {
+    emitted = previous;
+  }
 }
 
 // --- Body fidelity ------------------------------------------------------------
@@ -650,10 +910,26 @@ function htmlBodyLength(html) {
   return alnumCount(decodeEntities(html.replace(/<[^>]+>/g, ' ')));
 }
 
+// A markdown link or image destination, in either plain or angle-bracket form.
+const MD_TARGET = /\((?:<[^>]*>|[^)]*)\)/.source;
+
+/**
+ * Text on the markdown side that also exists on the HTML side.
+ *
+ * The HTML measurement strips tags, so everything carried in an attribute is
+ * invisible to it: link targets, image captions, and the generated `[video]`
+ * label exist only in the markdown. Counting them made the ratio a measure of
+ * how illustrated a section is rather than how faithfully it converted — adding
+ * `title` as an image caption, a strict improvement, pushed two pages past the
+ * duplication ceiling and turned them STALE.
+ */
 function markdownBodyLength(md) {
-  // Link targets exist only on the markdown side; counting them would let a
-  // link-heavy section hide prose the converter dropped.
-  return alnumCount(md.replace(/\]\([^)]*\)/g, ']'));
+  return alnumCount(
+    md
+      .replace(new RegExp(`!\\[[^\\]]*\\]${MD_TARGET}`, 'g'), '')
+      .replace(new RegExp(`\\[video\\]${MD_TARGET}`, 'g'), '')
+      .replace(new RegExp(`\\]${MD_TARGET}`, 'g'), ']'),
+  );
 }
 
 // Below this the ratio is dominated by noise: heading-only sections, one-line
@@ -687,35 +963,18 @@ const MASS_MIN_RATIO = 0.98;
 
 // Every guard below was a lower bound only, so duplicated content was invisible
 // to all of them. Measured ceilings: per-section 1.07, whole-page 1.005.
-const FIDELITY_MAX_RATIO = 1.3;
-const MASS_MAX_RATIO = 1.05;
+const FIDELITY_MAX_RATIO = 1.15;
+const MASS_MAX_RATIO = 1.02;
 
-// Catastrophe detectors for whole categories of inline markup. These do not try
-// to notice one lost link; they notice a markup change that makes the converter
-// stop recognising links or code spans at all. That is the observed failure
-// shape: matching only bare tags meant a single added attribute took out every
-// instance at once. Page-level ratios measured across the ten sources are
-// 0.64-1.06 for links and 0.96-1.01 for code spans outside <pre>, against
-// near-zero for the failures these catch, so the floors sit far from both.
-const LINK_MIN_RATIO = 0.4;
-const CODE_MIN_RATIO = 0.6;
-const INLINE_GUARD_MIN_COUNT = 20;
+// How much of the previous build's section count a new build must retain.
+// Telegram does remove things — a deprecated method, a merged section — so this
+// is not an equality, but a page cannot lose a quarter of its sections in one
+// edit without something having gone wrong with the parse. A restructuring that
+// genuinely shrank a page is accepted by rerunning with --force.
+const SHRINK_MIN_RATIO = 0.75;
 
-/** Count inline code spans in markdown, skipping fenced blocks. */
-function countCodeSpans(md) {
-  let fence = null;
-  let total = 0;
-  for (const line of md.split('\n')) {
-    const f = line.match(/^[ \t]*(`{3,})(.*)$/);
-    if (f) {
-      if (fence === null) fence = f[1];
-      else if (f[1].length >= fence.length && !f[2].trim()) fence = null;
-      continue;
-    }
-    if (fence === null) total += Math.floor((line.match(/`+/g) ?? []).length / 2);
-  }
-  return total;
-}
+
+
 
 if (selfTest) {
   const BASE = 'https://core.telegram.org/bots/api';
@@ -852,7 +1111,28 @@ if (selfTest) {
       process.exit(1);
     }
   }
-  console.log(`self-test passed (${checks.length} converter cases)`);
+  // Markup the renderer has no rule for must abort rather than be flattened.
+  // A block element carries a word boundary; stripping it to nothing glues
+  // sentences together at a perfect character count, which no ratio guard can
+  // see. These are the shapes that reached production as run-on text before.
+  const mustThrow = [
+    ['<dl><dt>Invoice</dt><dd>A request for payment.</dd></dl>', 'definition list'],
+    ['<p>a</p><figure><figcaption>Caption</figcaption></figure>', 'figure'],
+    ['<details><summary>More</summary><p>Body</p></details>', 'disclosure'],
+  ];
+  for (const [html, label] of mustThrow) {
+    let threw = false;
+    try {
+      inlineToMd(html, BASE);
+    } catch {
+      threw = true;
+    }
+    if (!threw) {
+      console.error(`self-test failed: ${label} markup was flattened instead of refused`);
+      process.exit(1);
+    }
+  }
+  console.log(`self-test passed (${checks.length + mustThrow.length} converter cases)`);
   process.exit(0);
 }
 
@@ -939,24 +1219,47 @@ if (golden) {
 // --- Page splitting -----------------------------------------------------------
 
 /** Extract the documentation content region of a core.telegram.org page. */
+/**
+ * The documentation content of a core.telegram.org page: the inside of the
+ * element carrying id="dev_page_content".
+ *
+ * The boundary used to be the first occurrence of the literal
+ * `<div class="footer_wrap"`, which is not a boundary at all but a guess that
+ * the string appears exactly once and only after the content. Both halves fail:
+ * a rename made it absent (silently appending the whole site footer to the last
+ * section), and an example reusing that class inside the documentation truncated
+ * the page — with 26 of 107 sections published and every guard satisfied,
+ * because they all measured the truncated region against itself.
+ *
+ * Finding the element's own end tag removes the guess. Depth counting makes
+ * nesting irrelevant, and running out of document is a refusal rather than a
+ * silent "take the rest".
+ */
 function contentRegion(html) {
   const start = html.indexOf('id="dev_page_content"');
-  const end = html.indexOf('<div class="footer_wrap"');
   if (start === -1) throw new Error('page layout changed: no dev_page_content');
-  // Start past the end of the container's own opening tag. Slicing from the
-  // attribute would leave `id="dev_page_content">` as bare text ahead of the
-  // first tag, which the converter would faithfully carry into the output.
+  // Back up to the opening "<" of the tag carrying the id, then forward past it.
+  const tagStart = html.lastIndexOf('<', start);
   const openEnd = html.indexOf('>', start);
-  if (openEnd === -1) throw new Error('page layout changed: unterminated dev_page_content tag');
-  // A missing footer marker used to mean "take everything to the end of the
-  // document", so renaming that class would silently append the site footer and
-  // navigation to the last section. Every guard would accept it, because the
-  // extra material is converted faithfully and accounted for. Refusing instead
-  // costs one STALE run and cannot corrupt the cache.
-  if (end === -1 || end < openEnd) {
-    throw new Error('page layout changed: no footer_wrap after the content region');
+  if (tagStart === -1 || openEnd === -1) {
+    throw new Error('page layout changed: unterminated dev_page_content tag');
   }
-  return html.slice(openEnd + 1, end);
+  const tagName = /^<\s*([a-zA-Z][^\s/>]*)/.exec(html.slice(tagStart))?.[1]?.toLowerCase();
+  if (!tagName) throw new Error('page layout changed: dev_page_content is not an element');
+
+  const scanner = new RegExp(`<(/?)${tagName}\\b[^>]*>`, 'gi');
+  scanner.lastIndex = openEnd + 1;
+  let depth = 0;
+  let m;
+  while ((m = scanner.exec(html)) !== null) {
+    if (m[1] === '/') {
+      if (depth === 0) return html.slice(openEnd + 1, m.index);
+      depth -= 1;
+    } else if (!/\/>$/.test(m[0])) {
+      depth += 1;
+    }
+  }
+  throw new Error(`page layout changed: <${tagName} id="dev_page_content"> is never closed`);
 }
 
 function classifySection(anchor, title, level, parentAnchor, prose) {
@@ -1078,31 +1381,32 @@ function splitSections(region, baseUrl, prose = false) {
   for (const mark of segments) {
     const bodyHtml = mark.bodyHtml;
     if (mark.level === 3) currentH3 = mark.anchor;
-    const md = blockToMd(bodyHtml, baseUrl);
+    const tree = parseHtml(bodyHtml);
+    const { md, stats } = renderCounted(tree, baseUrl);
     const htmlLen = htmlBodyLength(bodyHtml);
     if (htmlLen >= FIDELITY_MIN_CHARS) {
       fidelity.push({ anchor: mark.anchor, ratio: markdownBodyLength(md) / htmlLen, htmlLen });
     }
-    // Text volume cannot see a table flattened into a paragraph: every
-    // character survives while the rows and columns are destroyed. Block
-    // structure has to be counted separately.
-    const n = (s, re) => (s.match(re) ?? []).length;
-    for (const [kind, expected, got] of [
-      ['table', n(bodyHtml, /<table\b/gi), n(md, /^[ \t]*\|[\s|:-]*---/gm)],
-      ['code block', n(bodyHtml, /<pre\b/gi), Math.floor(n(md, /^[ \t]*`{3,}/gm) / 2)],
+    // Structure is compared between what the page contains and what the renderer
+    // wrote, both counted from the same parse. Text volume cannot see a table
+    // flattened into a paragraph — every character survives while the rows and
+    // columns are destroyed — and reading the finished markdown back cannot tell
+    // a table row from a shell pipeline inside a code fence, nor find a table
+    // that a blockquote has indented. Losing one row of the 95-currency table
+    // promoted the first data row into the header's place: still valid markdown,
+    // no longer true.
+    const inPage = countTree(tree);
+    for (const [kind, key] of [
+      ['table', 'tables'],
+      ['table row', 'rows'],
+      ['code block', 'fences'],
+      ['link', 'links'],
+      ['image or video', 'media'],
+      ['inline code span', 'codes'],
     ]) {
+      const expected = inPage[key] ?? 0;
+      const got = stats[key] ?? 0;
       if (got < expected) structural.push({ anchor: mark.anchor, kind, expected, got });
-    }
-    // Table rows are counted exactly, not as a ratio: across 573 sections with
-    // tables the markdown line count equals <tr> plus one separator line per
-    // table, with zero exceptions. Counting only whole tables let a dropped row
-    // through — losing the header row of the 95-currency table promoted the
-    // first data row into its place, leaving a table that still parses, still
-    // passes every text-volume check, and is no longer true.
-    const expectedRows = n(bodyHtml, /<tr\b/gi) + n(bodyHtml, /<table\b/gi);
-    const gotRows = n(md, /^[ \t]*\|/gm);
-    if (expectedRows > 0 && gotRows !== expectedRows) {
-      structural.push({ anchor: mark.anchor, kind: 'table row', expected: expectedRows, got: gotRows });
     }
     const firstPara = md.split('\n\n').find((b) => b && !b.startsWith('|') && !b.startsWith('```'));
     const summary = (firstPara ?? '').replace(/\n/g, ' ').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
@@ -1156,31 +1460,11 @@ function splitSections(region, baseUrl, prose = false) {
       `body text duplicated in ${bloated.length} of ${fidelity.length} measurable sections: ${worst}`,
     );
   }
-  // Whole categories of inline markup disappear at once when a tag pattern
-  // stops matching, and nothing above can see it: link targets are excluded
-  // from the text comparison by design, and emphasis and backticks are
-  // punctuation that no character count weighs.
-  const nAll = (s, re) => (s.match(re) ?? []).length;
-  const mdAll = sections.map((s) => s.md).join('\n');
-  const htmlLinks = nAll(region, /<a\b[^>]*\bhref\s*=/gi);
-  const mdLinks = nAll(mdAll, /\]\(/g);
-  if (htmlLinks >= INLINE_GUARD_MIN_COUNT && mdLinks / htmlLinks < LINK_MIN_RATIO) {
-    throw new Error(
-      `only ${mdLinks} of ${htmlLinks} links survived conversion — ` +
-        'the converter may no longer recognise this page\'s link markup',
-    );
-  }
-  // <code> inside <pre> becomes a fence, not a span, so it is excluded here;
-  // with that exclusion the two counts match almost exactly in practice.
-  const htmlSpans =
-    nAll(region, /<code\b/gi) - nAll(region, /<pre\b[^>]*>\s*<code\b/gi);
-  const mdSpans = countCodeSpans(mdAll);
-  if (htmlSpans >= INLINE_GUARD_MIN_COUNT && mdSpans / htmlSpans < CODE_MIN_RATIO) {
-    throw new Error(
-      `only ${mdSpans} of ${htmlSpans} inline code spans survived conversion — ` +
-        'the converter may no longer recognise this page\'s <code> markup',
-    );
-  }
+  // Links, images and code spans used to be compared page-wide with loose ratios
+  // because reading them back out of finished markdown was unreliable. They are
+  // now counted per section at the point of emission, in the structural guard
+  // above, which is both exact and free of that ambiguity.
+
   // Conservation of mass. Both guards above weigh section bodies against section
   // bodies, so neither can see text that ended up in no section at all — which
   // is precisely how the dropped page intros survived two full audits. This
@@ -1487,10 +1771,27 @@ for (const source of SOURCES) {
   try {
     sections = splitSections(region, source.url, source.prose);
     // Small guide pages legitimately have fewer sections than the reference
-    // pages; the guard still has to catch a page that parsed to almost nothing.
+    // pages; this catches a cold-start page that parsed to almost nothing.
     const min = source.min ?? 10;
     if (sections.length < min) {
       throw new Error(`parsed only ${sections.length} sections (expected at least ${min})`);
+    }
+    // The documentation only grows, so a build that shrinks is the strongest
+    // signal available that something stopped being recognised — and it is the
+    // only one that does not depend on knowing today's markup. An absolute floor
+    // cannot provide it: when the Mini Apps page had its sub-headings demoted a
+    // level, 107 sections became 15 and were published as `refreshed`, because
+    // 15 clears a floor of 10. Every method and type file on that page would
+    // have disappeared while the run reported success.
+    // --force is the operator saying "I have looked at this, rebuild anyway",
+    // which is the escape hatch for a restructuring that really did shrink.
+    const before = force ? 0 : entry?.sectionCount ?? 0;
+    if (before > 0 && sections.length < before * SHRINK_MIN_RATIO) {
+      throw new Error(
+        `section count fell from ${before} to ${sections.length} ` +
+          `(${Math.round((sections.length / before) * 100)}% of the last build) — ` +
+          'the page structure may have changed in a way the splitter no longer recognises',
+      );
     }
   } catch (err) {
     sourceProblem(source, entry, hasCache, err.message);

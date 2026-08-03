@@ -1,7 +1,7 @@
 === _intro | section | h3 | parent=- ===
 # Introduction
 
-[![](https://core.telegram.org/file/811140095/1/lfTvDVqVS8M.43169/1a191248e6cf027581)](https://core.telegram.org/file/811140227/2/ZTXUngAbELM.193805/ba6aa233d1d4206207)
+[![Payments API. Click for hi-res picture](https://core.telegram.org/file/811140095/1/lfTvDVqVS8M.43169/1a191248e6cf027581)](https://core.telegram.org/file/811140227/2/ZTXUngAbELM.193805/ba6aa233d1d4206207)
 
 **Telegram Bot Payments** are a free and open platform that allows sellers to accept payments for goods and services from Telegram users. Telegram doesn't collect payment information and takes **no commission**. This page covers payments for **physical goods and services** – if you’re interested in selling **digital goods and services**, please check out our [dedicated page](https://core.telegram.org/bots/payments-stars).
 
@@ -43,6 +43,8 @@ The bot can offer several shipping options for physical goods based on the deliv
 Telegram does **not** process payments from users and instead allows developers to integrate directly with different third-party **payment providers** around the world. It is the payment providers that handle and store all sensitive information, like credit card details. Neither Telegram nor the bot developers have access to it.
 
 If you work for a company that provides services similar to standalone accounts in [Stripe Connect](https://stripe.com/connect), please let us know via [@BotSupport](https://t.me/botsupport) (include the hashtag `#paymentsprovider` in your message).
+
+---
 
 === the-payments-api | section | h3 | parent=- ===
 # The Payments API
@@ -92,7 +94,7 @@ Use the [sendInvoice](https://core.telegram.org/bots/api#sendinvoice) method to 
 
 Invoice messages with a pay button can be sent to **chats of any type**: private chats with the user, groups, or channels. The resulting invoice message will look like this:
 
-[![](https://core.telegram.org/file/464001285/4/UBRF1ViiEOU.106159/0bbcdcb7f5af77a782)](https://core.telegram.org/file/464001285/4/UBRF1ViiEOU.106159/0bbcdcb7f5af77a782)
+[![Join button](https://core.telegram.org/file/464001285/4/UBRF1ViiEOU.106159/0bbcdcb7f5af77a782)](https://core.telegram.org/file/464001285/4/UBRF1ViiEOU.106159/0bbcdcb7f5af77a782)
 
 Bot Invoice
 
@@ -100,7 +102,7 @@ Bot Invoice
 
 If `@merchantbot` supports [inline mode](https://core.telegram.org/bots/inline), you can use [inputInvoiceMessageContent](https://core.telegram.org/bots/api#inputinvoicemessagecontent) to allow users to share invoices for your goods and services to their one-on-one chats with friends, or to their groups and channels. These invoices will have a **Pay button** that can be used multiple times.
 
-[![](https://core.telegram.org/file/464001162/3/C2wdLOXaMA0.97425/32091afe52ef0e59f2)](https://core.telegram.org/file/464001162/3/C2wdLOXaMA0.97425/32091afe52ef0e59f2)
+[![Join button](https://core.telegram.org/file/464001162/3/C2wdLOXaMA0.97425/32091afe52ef0e59f2)](https://core.telegram.org/file/464001162/3/C2wdLOXaMA0.97425/32091afe52ef0e59f2)
 
 Inline Invoice
 
@@ -123,7 +125,7 @@ Regardless of whether or not the **Pay** button is available in an invoice, the 
 
 If the *max_tip_amount* parameter is set to above `0`, users can add a tip to their payment. You can use the parameter *suggested_tip_amounts* to suggest particular amounts that you feel will be relevant for the invoice.
 
-[![](https://core.telegram.org/file/464001701/6/-BJZJqe9VeA.70226/75a192d58d76dc96c1)](https://core.telegram.org/file/464001701/6/-BJZJqe9VeA.70226/75a192d58d76dc96c1)
+[![Join button](https://core.telegram.org/file/464001701/6/-BJZJqe9VeA.70226/75a192d58d76dc96c1)](https://core.telegram.org/file/464001701/6/-BJZJqe9VeA.70226/75a192d58d76dc96c1)
 
 Adding Tips
 
@@ -132,7 +134,7 @@ Adding Tips
 
 The user specifies shipping information or other info requested by the bot. This could be the user's full name, an email address, a phone number in international format, or a full postal address for delivery.
 
-[![](https://core.telegram.org/file/464001896/2/9gTF8_aGQkE.45826/d5b11a999a40a1a6d9)](https://core.telegram.org/file/464001896/2/9gTF8_aGQkE.45826/d5b11a999a40a1a6d9)
+[![Shipping Info](https://core.telegram.org/file/464001896/2/9gTF8_aGQkE.45826/d5b11a999a40a1a6d9)](https://core.telegram.org/file/464001896/2/9gTF8_aGQkE.45826/d5b11a999a40a1a6d9)
 
 Shipping Info
 
@@ -148,7 +150,7 @@ If a shipping address was requested and you included the parameter *is_flexible*
 
 The user selects a delivery option from the list (the overall amount to be paid may change at this point) and proceeds to checkout.
 
-[![](https://core.telegram.org/file/464001836/2/rwUQeqMOsnI.31142/b0cc9d885ccb78ab39)](https://core.telegram.org/file/464001836/2/rwUQeqMOsnI.31142/b0cc9d885ccb78ab39)
+[![Choose Delivery Option](https://core.telegram.org/file/464001836/2/rwUQeqMOsnI.31142/b0cc9d885ccb78ab39)](https://core.telegram.org/file/464001836/2/rwUQeqMOsnI.31142/b0cc9d885ccb78ab39)
 
 Choose Delivery Option
 
@@ -168,7 +170,7 @@ In case the bot confirms the order, Telegram requests the payment provider to co
 
 If the invoice message was sent in the chat with `@merchantbot`, it becomes a Receipt in the UI for the user — they can open this receipt at any time and see all the details of the transaction:
 
-[![](https://core.telegram.org/file/464001648/1/1-P1Pb7TusA.105628/b9cb2cf4c7427302c0)](https://core.telegram.org/file/464001648/1/1-P1Pb7TusA.105628/b9cb2cf4c7427302c0)
+[![Receipt](https://core.telegram.org/file/464001648/1/1-P1Pb7TusA.105628/b9cb2cf4c7427302c0)](https://core.telegram.org/file/464001648/1/1-P1Pb7TusA.105628/b9cb2cf4c7427302c0)
 
 Receipt
 
@@ -190,6 +192,8 @@ Before your merchant bot goes into live mode, please ensure the following:
 - Your bot must provide support for its customers, either by responding to a /support command or by some other clearly communicated means. Users must have a clear way of contacting you about their purchases and you must process their support requests in a timely fashion. You must notify your users that Telegram support or [bot support](https://t.me/botsupport) will not able to help them with purchases made via your bot.
 - Make sure that your server hardware and software is stable. Use backups to make sure that you don't lose data about your users' payments.
 - Make sure that you have completed the live checklist for your selected **payments provider** as well as this one.
+
+---
 
 === faq | section | h3 | parent=- ===
 # FAQ
