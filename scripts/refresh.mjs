@@ -247,9 +247,21 @@ function inlineToMd(html, baseUrl) {
   // contributed no text in the first place.
   s = s.replace(/<img\b[^>]*>/g, (tag) => {
     const alt = tag.match(/\balt="([^"]*)"/)?.[1] ?? '';
-    if (alt) return alt;
     const src = tag.match(/\bsrc="([^"]*)"/)?.[1];
-    return src ? `![](${absolutize(src)})` : '';
+    // Emoji sprites are text, not illustrations: they become their character.
+    const isEmoji = /\bclass="[^"]*\bemoji\b/.test(tag) || (src ?? '').includes('/img/emoji/');
+    if (isEmoji || !src) return alt;
+    return `![${alt}](${absolutize(src)})`;
+  });
+  // A <video> keeps its media in a nested <source>; neither tag contributes
+  // text, so without this the whole player vanishes silently — 23 sections of
+  // the guides illustrate a feature with nothing but a video.
+  s = s.replace(/<video\b([^>]*)>([\s\S]*?)<\/video>/gi, (_, attrs, inner) => {
+    const src =
+      inner.match(/<source\b[^>]*\bsrc="([^"]*)"/i)?.[1] ?? attrs.match(/\bsrc="([^"]*)"/)?.[1];
+    const poster = attrs.match(/\bposter="([^"]*)"/i)?.[1];
+    if (src) return `[video](${absolutize(src)})`;
+    return poster ? `![](${absolutize(poster)})` : '';
   });
   // Preserve intentional HTML line breaks separately from source formatting
   // whitespace and numeric entities that describe control characters.
@@ -262,6 +274,9 @@ function inlineToMd(html, baseUrl) {
   });
   s = s.replace(/<(?:b|strong)>(.*?)<\/(?:b|strong)>/gs, '**$1**');
   s = s.replace(/<(?:i|em)>(.*?)<\/(?:i|em)>/gs, '*$1*');
+  // A <mark> badge annotates a name rather than being part of it: plain text
+  // turns "signature NEW" into something a reader takes for the field name.
+  s = s.replace(/<mark\b[^>]*>(.*?)<\/mark>/gs, '**$1**');
   // Code spans: strip tags INSIDE the span first, then decode, then hide the
   // result behind a placeholder. Decoding before the generic tag-strip below
   // would turn e.g. `&lt;value&gt;` into `<value>` and the stripper would eat
@@ -292,7 +307,7 @@ function inlineToMd(html, baseUrl) {
 function tableToMd(html, baseUrl) {
   const rows = [...html.matchAll(/<tr>(.*?)<\/tr>/gs)].map((m) =>
     [...m[1].matchAll(/<t[hd][^>]*>(.*?)<\/t[hd]>/gs)].map((c) =>
-      inlineToMd(c[1], baseUrl).replace(/\n/g, ' ').replace(/\|/g, '\\|').trim(),
+      inlineToMd(c[1], baseUrl).replace(/[ \t]*\n/g, '<br>').replace(/\|/g, '\\|').trim(),
     ),
   );
   if (rows.length === 0) return '';
@@ -365,8 +380,19 @@ function blockToMd(html, baseUrl) {
   // Match top-level blocks in document order. Each block is consumed whole via
   // findClose, so nesting cannot truncate it, and the scan resumes past its end.
   const openRe = /<(p|table|ul|ol|blockquote|pre|h[56]|div)(?:\s[^>]*)?>/gi;
+  let cursor = 0;
   let m;
   while ((m = openRe.exec(html)) !== null) {
+    if (m.index < cursor) {
+      openRe.lastIndex = cursor;
+      continue;
+    }
+    // Content between recognized blocks is content too. The docs place an
+    // image or a video in a bare <a>/<video> beside a <p> caption; collecting
+    // only the matched blocks dropped it whenever a sibling block existed,
+    // which is how 32 illustrations disappeared without changing any guard.
+    const gap = inlineToMd(html.slice(cursor, m.index), baseUrl).trim();
+    if (gap) out.push(gap);
     const tag = m[1].toLowerCase();
     const bodyStart = m.index + m[0].length;
     const closeAt = findClose(html, bodyStart, tag);
@@ -388,6 +414,7 @@ function blockToMd(html, baseUrl) {
     }
     const inner = html.slice(bodyStart, bodyEnd);
     openRe.lastIndex = resumeAt;
+    cursor = resumeAt;
     switch (tag) {
       case 'p':
         out.push(inlineToMd(inner, baseUrl).trim());
@@ -446,6 +473,8 @@ function blockToMd(html, baseUrl) {
         break;
     }
   }
+  const tail = inlineToMd(html.slice(cursor), baseUrl).trim();
+  if (tail) out.push(tail);
   // Fallback: section had no recognized blocks but has visible text.
   if (out.length === 0) {
     const text = inlineToMd(html, baseUrl).trim();
@@ -530,10 +559,21 @@ if (selfTest) {
       '![](https://core.telegram.org/file/x.png)',
     ],
   ];
-  // An emoji image still collapses to its alt character rather than a link.
-  if (inlineToMd('<img src="/img/e.png" alt="😀">', BASE) !== '😀') {
-    console.error('self-test failed: emoji image should render as its alt character');
-    process.exit(1);
+  // Emoji sprites collapse to their character; a content image keeps its src.
+  // Both discriminators the converter uses are exercised here.
+  const imgCases = [
+    ['<img class="emoji" src="//telegram.org/img/emoji/40/F0.png" alt="😀">', '😀'],
+    ['<img src="//telegram.org/img/emoji/40/F0.png" alt="😀">', '😀'],
+    ['<img src="/file/abc" alt="Types of buttons">', '![Types of buttons](https://core.telegram.org/file/abc)'],
+    ['<video poster="/file/p"><source src="/file/v.mp4" type="video/mp4"></video>', '[video](https://core.telegram.org/file/v.mp4)'],
+    ['signature <sup><mark class="mark-new">NEW</mark></sup>', 'signature **NEW**'],
+  ];
+  for (const [html, expected] of imgCases) {
+    const actual = inlineToMd(html, BASE);
+    if (actual !== expected) {
+      console.error(`self-test failed for ${JSON.stringify(html)}: ${JSON.stringify(actual)} !== ${JSON.stringify(expected)}`);
+      process.exit(1);
+    }
   }
   const checks = [
     ...inlineCases.map(([html, expected]) => [html, expected, inlineToMd]),
