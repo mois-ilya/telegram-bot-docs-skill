@@ -88,6 +88,11 @@ With ~970 sections, a broad term can match many lines. Narrow by `kind`:
 `section` is the prose guides; `changelog` is dated history. Searching
 `grep ' — method — ' cache/index.md | grep -i invoice` beats an unfiltered grep.
 
+About 47 anchors appear in two sources because the official pages repeat them (the
+Mini Apps page carries its own copy of several FAQ entries and changelog dates). Both
+copies are genuine and cite their own page, but prefer the dedicated source: `faq/`
+over `webapps/` for FAQ entries, `changelog/` over `webapps/` for dated entries.
+
 Useful non-obvious anchors:
 
 - Formatting / MarkdownV2 / HTML escaping → `bot-api/formatting-options.md`
