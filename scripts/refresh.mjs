@@ -240,9 +240,17 @@ function absolutize(href) {
 /** Convert inline HTML (inside a paragraph/cell/list item) to markdown. */
 function inlineToMd(html, baseUrl) {
   let s = html;
-  // Emoji images carry the emoji in alt.
-  s = s.replace(/<img[^>]*alt="([^"]*)"[^>]*>/g, '$1');
-  s = s.replace(/<img[^>]*>/g, '');
+  // Emoji images carry the emoji in alt and become that character. A content
+  // image with an empty alt (a diagram, or the Stars pricing table published as
+  // a picture) must still leave a reference behind: dropping it removes
+  // information silently, and no character count can notice because the tag
+  // contributed no text in the first place.
+  s = s.replace(/<img\b[^>]*>/g, (tag) => {
+    const alt = tag.match(/\balt="([^"]*)"/)?.[1] ?? '';
+    if (alt) return alt;
+    const src = tag.match(/\bsrc="([^"]*)"/)?.[1];
+    return src ? `![](${absolutize(src)})` : '';
+  });
   // Preserve intentional HTML line breaks separately from source formatting
   // whitespace and numeric entities that describe control characters.
   s = s.replace(/<br\s*\/?>/g, '\u0001');
@@ -316,6 +324,12 @@ function findClose(html, from, tag) {
   return -1;
 }
 
+// Block-level start tags that implicitly close an open <p>.
+const BLOCK_START = /<(?:table|div|ul|ol|blockquote|pre|h[1-6])\b/i;
+
+// Block children of a list item that lose meaning if flattened to inline text.
+const BLOCK_IN_ITEM = /<(?:ul|ol|pre|table|blockquote)\b/i;
+
 /** Split a list body into top-level <li> bodies, skipping nested lists. */
 function splitListItems(html) {
   const items = [];
@@ -357,8 +371,23 @@ function blockToMd(html, baseUrl) {
     const bodyStart = m.index + m[0].length;
     const closeAt = findClose(html, bodyStart, tag);
     if (closeAt === -1) continue;
-    const inner = html.slice(bodyStart, closeAt);
-    openRe.lastIndex = closeAt + tag.length + 3; // past "</tag>"
+    let bodyEnd = closeAt;
+    let resumeAt = closeAt + tag.length + 3; // past "</tag>"
+    if (tag === 'p') {
+      // A <p> cannot contain block-level content: HTML closes it implicitly at
+      // the next block start tag. The Bot API page relies on this, writing
+      // <p><table>...</table></p>. Honouring the literal </p> would hand the
+      // whole table to inlineToMd, which strips tags and flattens it into
+      // run-on text — real damage that a character count cannot detect,
+      // because every character survives.
+      const implicit = html.slice(bodyStart, closeAt).search(BLOCK_START);
+      if (implicit !== -1) {
+        bodyEnd = bodyStart + implicit;
+        resumeAt = bodyEnd; // rescan from the block tag itself
+      }
+    }
+    const inner = html.slice(bodyStart, bodyEnd);
+    openRe.lastIndex = resumeAt;
     switch (tag) {
       case 'p':
         out.push(inlineToMd(inner, baseUrl).trim());
@@ -370,13 +399,16 @@ function blockToMd(html, baseUrl) {
       case 'ol': {
         const items = splitListItems(inner).map((raw, i) => {
           const marker = tag === 'ul' ? '-' : `${i + 1}.`;
-          // A nested list becomes an indented sub-list; the text before it is
-          // this item's own content.
-          const nestedAt = raw.search(/<(?:ul|ol)\b/i);
-          const own = nestedAt === -1 ? raw : raw.slice(0, nestedAt);
+          // Block children of an item (a nested list, but equally a <pre> or a
+          // <table>) are rendered as blocks and indented underneath it. Passing
+          // them to inlineToMd would strip their tags and mash a code block
+          // into the surrounding prose — the webhooks guide keeps 14 of its 22
+          // shell snippets inside <li> elements.
+          const blockAt = raw.search(BLOCK_IN_ITEM);
+          const own = blockAt === -1 ? raw : raw.slice(0, blockAt);
           const head = `${marker} ${inlineToMd(own, baseUrl).trim().replace(/\n/g, '\n  ')}`;
-          if (nestedAt === -1) return head;
-          const sub = blockToMd(raw.slice(nestedAt), baseUrl)
+          if (blockAt === -1) return head;
+          const sub = blockToMd(raw.slice(blockAt), baseUrl)
             .split('\n')
             .map((l) => (l ? `  ${l}` : l))
             .join('\n');
@@ -486,7 +518,23 @@ if (selfTest) {
     ['<ul><li>one<li>two</ul>', '- one\n- two'],
     // Ordered lists keep their numbering across nesting.
     ['<ol><li>one<ol><li>inner</li></ol></li><li>two</li></ol>', '1. one\n  1. inner\n2. two'],
+    // <p><table> — the paragraph must close implicitly at the table, or the
+    // table is flattened into run-on text with every character still present.
+    [
+      '<p>intro<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table></p>',
+      'intro\n\n| A | B |\n| --- | --- |\n| 1 | 2 |',
+    ],
+    // A content image with no alt must leave a reference behind.
+    [
+      '<p><img src="/file/x.png" alt="" /></p>',
+      '![](https://core.telegram.org/file/x.png)',
+    ],
   ];
+  // An emoji image still collapses to its alt character rather than a link.
+  if (inlineToMd('<img src="/img/e.png" alt="😀">', BASE) !== '😀') {
+    console.error('self-test failed: emoji image should render as its alt character');
+    process.exit(1);
+  }
   const checks = [
     ...inlineCases.map(([html, expected]) => [html, expected, inlineToMd]),
     ...blockCases.map(([html, expected]) => [html, expected, blockToMd]),
@@ -572,6 +620,7 @@ function splitSections(region, baseUrl, prose = false) {
   }
   const sections = [];
   const fidelity = [];
+  const structural = [];
   let currentH3 = null;
   for (let i = 0; i < marks.length; i++) {
     const mark = marks[i];
@@ -582,6 +631,16 @@ function splitSections(region, baseUrl, prose = false) {
     const htmlLen = htmlBodyLength(bodyHtml);
     if (htmlLen >= FIDELITY_MIN_CHARS) {
       fidelity.push({ anchor: mark.anchor, ratio: markdownBodyLength(md) / htmlLen, htmlLen });
+    }
+    // Text volume cannot see a table flattened into a paragraph: every
+    // character survives while the rows and columns are destroyed. Block
+    // structure has to be counted separately.
+    const n = (s, re) => (s.match(re) ?? []).length;
+    for (const [kind, expected, got] of [
+      ['table', n(bodyHtml, /<table\b/gi), n(md, /^[ \t]*\|[\s|:-]*---/gm)],
+      ['code block', n(bodyHtml, /<pre\b/gi), Math.floor(n(md, /^[ \t]*`{3,}/gm) / 2)],
+    ]) {
+      if (got < expected) structural.push({ anchor: mark.anchor, kind, expected, got });
     }
     const firstPara = md.split('\n\n').find((b) => b && !b.startsWith('|') && !b.startsWith('```'));
     const summary = (firstPara ?? '').replace(/\n/g, ' ').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
@@ -599,6 +658,16 @@ function splitSections(region, baseUrl, prose = false) {
   // one was carried over *whole*. Without it a converter that silently drops
   // part of a body still reports "fresh", which is the one way this cache can
   // mislead without any visible symptom.
+  if (structural.length > 0) {
+    const worst = structural
+      .slice(0, 5)
+      .map((s2) => `${s2.anchor}: ${s2.expected} ${s2.kind}(s) -> ${s2.got}`)
+      .join(', ');
+    throw new Error(
+      `block structure lost in ${structural.length} section(s) — ` +
+        `the converter may not handle the current markup: ${worst}`,
+    );
+  }
   const lost = fidelity.filter((f) => f.ratio < FIDELITY_MIN_RATIO);
   if (lost.length > 0) {
     const worst = [...lost]

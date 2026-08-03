@@ -36,13 +36,21 @@ describe a symptom onto the official term needed to find it.
 4. Reports `STALE` with exit code 2 when an existing cache cannot be checked, and
    `FATAL` with exit code 1 when no usable cache exists.
 
-Two guards decide whether a rebuild may be published. The heading guard refuses when
-the number of parsed sections does not match the number of headings on the page. The
-body-fidelity guard compares the visible text of each section's HTML against the
-Markdown produced from it and refuses when a section lost more than 15% of it. The
-first proves every section was found, the second proves each was carried over whole —
-without it a converter that silently drops part of a body still reports `fresh`,
-which is the only way this cache could mislead without a visible symptom.
+Three guards decide whether a rebuild may be published, and each catches what the
+previous one cannot:
+
+1. **Headings** — refuses when the number of parsed sections does not match the number
+   of headings on the page. Proves every section was *found*.
+2. **Body fidelity** — compares the visible text of each section's HTML against the
+   Markdown produced from it, refusing when a section lost more than 15%. Proves each
+   section was carried over *whole*.
+3. **Block structure** — counts tables and code blocks on both sides. Text volume
+   cannot see a table flattened into a paragraph or a code block mashed into prose:
+   every character survives while the rows, columns and fences are destroyed. Every
+   defect found in this converter so far had exactly that shape.
+
+Without them a converter that silently drops or flattens content still reports
+`fresh`, which is the only way this cache could mislead with no visible symptom.
 
 ## Distribution model
 
