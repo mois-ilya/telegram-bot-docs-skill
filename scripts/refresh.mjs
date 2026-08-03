@@ -118,6 +118,11 @@ const INDEX_PATH = join(CACHE_DIR, 'index.md');
 const LOCK_DIR = join(CACHE_DIR, '.refresh-lock');
 const LOCK_STALE_MS = 300_000; // a crashed run's lock is taken over after 5 min
 
+// `prose: true` marks guide pages that contain no API methods/types: every
+// section is classified as plain 'section' (changelog dates excepted), so the
+// camelCase/PascalCase heading heuristic cannot mislabel prose headings like
+// "Commands" or "Keyboards" as types. `min` overrides the default minimum
+// section count guard for legitimately small pages.
 const SOURCES = [
   {
     key: 'botapi',
@@ -130,6 +135,64 @@ const SOURCES = [
     label: 'Mini Apps',
     url: 'https://core.telegram.org/bots/webapps',
     dir: 'webapps',
+  },
+  {
+    key: 'features',
+    label: 'Bot Features',
+    url: 'https://core.telegram.org/bots/features',
+    dir: 'features',
+    prose: true,
+  },
+  {
+    key: 'changelog',
+    label: 'API Changelog',
+    url: 'https://core.telegram.org/bots/api-changelog',
+    dir: 'changelog',
+    prose: true,
+  },
+  {
+    key: 'webhooks',
+    label: 'Webhooks Guide',
+    url: 'https://core.telegram.org/bots/webhooks',
+    dir: 'webhooks',
+    prose: true,
+  },
+  {
+    key: 'payments',
+    label: 'Payments',
+    url: 'https://core.telegram.org/bots/payments',
+    dir: 'payments',
+    prose: true,
+  },
+  {
+    key: 'stars',
+    label: 'Payments via Stars',
+    url: 'https://core.telegram.org/bots/payments-stars',
+    dir: 'payments-stars',
+    prose: true,
+  },
+  {
+    key: 'inline',
+    label: 'Inline Mode',
+    url: 'https://core.telegram.org/bots/inline',
+    dir: 'inline',
+    prose: true,
+    min: 4,
+  },
+  {
+    key: 'games',
+    label: 'Games',
+    url: 'https://core.telegram.org/bots/games',
+    dir: 'games',
+    prose: true,
+    min: 5,
+  },
+  {
+    key: 'faq',
+    label: 'Bot FAQ',
+    url: 'https://core.telegram.org/bots/faq',
+    dir: 'faq',
+    prose: true,
   },
 ];
 
@@ -339,8 +402,11 @@ function contentRegion(html) {
   return html.slice(start, end === -1 ? undefined : end);
 }
 
-function classifySection(anchor, title, level, parentAnchor) {
+function classifySection(anchor, title, level, parentAnchor, prose) {
   if (/^\w+-\d+-\d{4}$/.test(anchor) || parentAnchor === 'recent-changes') return 'changelog';
+  // Guide pages document no methods or types, so the naming heuristic below
+  // must not run: headings like "Commands" or "Keyboards" are prose, not types.
+  if (prose) return 'section';
   if (level === 3) return 'section';
   if (/^[a-z]/.test(title) && !/\s/.test(title)) return 'method';
   if (/^[A-Z]/.test(title) && !/\s/.test(title)) return 'type';
@@ -353,7 +419,7 @@ function classifySection(anchor, title, level, parentAnchor) {
  * Throws when the markup does not parse cleanly — callers must treat that as
  * "keep the old cache", never as "write a partial one".
  */
-function splitSections(region, baseUrl) {
+function splitSections(region, baseUrl, prose = false) {
   // Comments and script/style bodies can legally contain "<h3" text that is
   // not a real heading; strip them so the raw-count guard below cannot report
   // a false mismatch (which would present as a permanent STALE). Parsing and
@@ -408,7 +474,7 @@ function splitSections(region, baseUrl) {
       title: mark.title,
       level: mark.level,
       parent: mark.level === 4 ? currentH3 : null,
-      kind: classifySection(mark.anchor, mark.title, mark.level, mark.level === 4 ? currentH3 : null),
+      kind: classifySection(mark.anchor, mark.title, mark.level, mark.level === 4 ? currentH3 : null, prose),
       md,
       summary: summary.length > 160 ? `${summary.slice(0, 157)}...` : summary,
     });
@@ -635,9 +701,12 @@ for (const source of SOURCES) {
 
   let sections;
   try {
-    sections = splitSections(region, source.url);
-    if (sections.length < 10) {
-      throw new Error(`parsed only ${sections.length} sections`);
+    sections = splitSections(region, source.url, source.prose);
+    // Small guide pages legitimately have fewer sections than the reference
+    // pages; the guard still has to catch a page that parsed to almost nothing.
+    const min = source.min ?? 10;
+    if (sections.length < min) {
+      throw new Error(`parsed only ${sections.length} sections (expected at least ${min})`);
     }
   } catch (err) {
     sourceProblem(source, entry, hasCache, err.message);
@@ -647,6 +716,9 @@ for (const source of SOURCES) {
   writeSections(source, sections);
   meta[source.key] = {
     url: source.url,
+    // Persisted so consumers (and the consistency test) can map a meta key to
+    // its cache directory without duplicating the SOURCES table.
+    dir: source.dir,
     version,
     hash,
     fetchedAt: now,

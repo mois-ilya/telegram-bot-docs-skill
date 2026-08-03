@@ -49,11 +49,36 @@ test('existing generated cache is internally consistent when present', () => {
   if (!existsSync(metaPath)) return;
 
   const meta = JSON.parse(readFileSync(metaPath, 'utf8'));
+  const checked = [];
   for (const [key, entry] of Object.entries(meta)) {
-    const dir = key === 'botapi' ? 'bot-api' : key === 'webapps' ? 'webapps' : null;
+    // The refresh writes `dir` into every entry it produces. Deriving it here
+    // instead of hardcoding a key->dir map means a newly added source is
+    // actually verified rather than silently skipped.
+    const dir = entry.dir;
     if (!dir || !Array.isArray(entry.sections)) continue;
     const files = new Set(readdirSync(join(ROOT, 'cache', dir)).filter((name) => name.endsWith('.md')));
-    assert.equal(files.size, entry.sections.length);
-    for (const section of entry.sections) assert.ok(files.has(`${section.anchor}.md`));
+    assert.equal(files.size, entry.sections.length, `section count mismatch for ${key}`);
+    for (const section of entry.sections) {
+      assert.ok(files.has(`${section.anchor}.md`), `missing ${dir}/${section.anchor}.md`);
+    }
+    checked.push(key);
+  }
+  // A meta.json that exists but yielded nothing to verify means the entries lost
+  // their `dir` field — the assertions above would vacuously pass.
+  assert.ok(checked.length > 0, 'meta.json present but no source could be verified');
+});
+
+test('every configured source is represented in the generated cache', () => {
+  const metaPath = join(ROOT, 'cache', 'meta.json');
+  if (!existsSync(metaPath)) return;
+
+  const script = readFileSync(join(ROOT, 'scripts', 'refresh.mjs'), 'utf8');
+  const table = script.slice(script.indexOf('const SOURCES = ['), script.indexOf('// --- HTML'));
+  const keys = [...table.matchAll(/key:\s*'([^']+)'/g)].map((m) => m[1]);
+  assert.ok(keys.length >= 2, 'could not parse the SOURCES table');
+
+  const meta = JSON.parse(readFileSync(metaPath, 'utf8'));
+  for (const key of keys) {
+    assert.ok(meta[key]?.sections?.length, `source "${key}" has no cached sections`);
   }
 });
