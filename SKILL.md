@@ -83,7 +83,13 @@ Methods are camelCase (`sendmessage.md`), types are PascalCase in the index
 (`InlineKeyboardButton` → `inlinekeyboardbutton.md`), files are named by the official
 page anchor.
 
-With ~970 sections, a broad term can match many lines. Narrow by `kind`:
+Every source also has an `_intro.md`: the text opening that page, before its first
+anchored heading. These are short and orienting — what the page is for, how its parts
+relate, and on `faq/` a full table of contents. Read one when a question is about a
+whole area rather than a named method (`webhooks/_intro.md` covers getUpdates versus
+setWebhook; `payments/_intro.md` covers physical versus digital goods).
+
+With ~980 sections, a broad term can match many lines. Narrow by `kind`:
 `method` and `type` exist only in `bot-api/` and `webapps/` and give the API surface;
 `section` is the prose guides; `changelog` is dated history. Searching
 `grep ' — method — ' cache/index.md | grep -i invoice` beats an unfiltered grep.

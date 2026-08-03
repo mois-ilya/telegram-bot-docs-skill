@@ -4,7 +4,7 @@ Portable Agent Skill providing freshness-checked official Telegram bot documenta
 as small per-section Markdown files instead of large HTML pages. Covers the Bot API
 and Mini Apps references plus the guide pages under `core.telegram.org/bots`:
 features, changelog, webhooks, payments, Stars, inline mode, games and the FAQ —
-~970 sections across ten sources.
+~980 sections across ten sources.
 
 The skill follows the portable `SKILL.md` Agent Skills layout and contains no
 client-specific workflow instructions. It can be used by skills-compatible agents
@@ -36,8 +36,14 @@ describe a symptom onto the official term needed to find it.
 4. Reports `STALE` with exit code 2 when an existing cache cannot be checked, and
    `FATAL` with exit code 1 when no usable cache exists.
 
-Three guards decide whether a rebuild may be published, and each catches what the
-previous one cannot:
+Freshness tracks the converter as well as the page. Each entry in `cache/meta.json`
+records a hash of `scripts/refresh.mjs`, so editing the converter invalidates every
+cached page automatically on the next run — a cache built by an older, buggier build
+can never stay marked `fresh`, and applying a fix never depends on someone remembering
+to pass `--force`.
+
+Four guards decide whether a rebuild may be published, and each catches what the
+previous ones cannot:
 
 1. **Headings** — refuses when the number of parsed sections does not match the number
    of headings on the page. Proves every section was *found*.
@@ -46,11 +52,25 @@ previous one cannot:
    section was carried over *whole*.
 3. **Block structure** — counts tables and code blocks on both sides. Text volume
    cannot see a table flattened into a paragraph or a code block mashed into prose:
-   every character survives while the rows, columns and fences are destroyed. Every
-   defect found in this converter so far had exactly that shape.
+   every character survives while the rows, columns and fences are destroyed. Most
+   defects found in this converter had exactly that shape.
+4. **Conservation of mass** — weighs the whole page against everything written out,
+   byte-exactly for splitter coverage and by ratio for converted text. Guards 2 and 3
+   compare section bodies against section bodies, so neither can see content that
+   ended up in *no* section — which is how the intro of every page went missing
+   undetected through two full audits. This is the only guard that closes that gap.
 
 Without them a converter that silently drops or flattens content still reports
 `fresh`, which is the only way this cache could mislead with no visible symptom.
+
+Text preceding a page's first anchored heading is published as a synthetic
+`_intro.md` section and passes through the same guards. It is real content: the
+webhooks guide opens with 1088 characters comparing `getUpdates` and `setWebhook`.
+
+`--golden` converts whole saved pages from `tests/fixtures/` offline and diffs the
+result against recorded output, so converter changes are reviewed as a diff over real
+markup rather than over fragments someone thought to write down. Re-record with
+`--update-golden` after an intended change.
 
 ## Distribution model
 
@@ -68,6 +88,7 @@ scripts/refresh.mjs dependency-free Node.js refresher and converter
 cache/.gitkeep      preserves the generated-cache directory in Git
 cache/*             generated locally and not distributed
 tests/              offline regression and CLI tests
+tests/fixtures/     saved real pages plus their recorded conversion (golden tests)
 ```
 
 ## Requirements and usage

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -24,6 +25,40 @@ test('unknown CLI options fail instead of silently refreshing', () => {
 test('converter regression checks pass without network access', () => {
   const output = execFileSync(process.execPath, [SCRIPT, '--self-test'], { encoding: 'utf8' });
   assert.match(output, /self-test passed/);
+});
+
+test('whole saved pages convert to their recorded output', () => {
+  // End-to-end over real markup, offline. The self-test above only covers
+  // fragments someone thought to write down; every converter defect found so far
+  // came from markup nobody anticipated, which is what a frozen real page holds.
+  const output = execFileSync(process.execPath, [SCRIPT, '--golden'], { encoding: 'utf8' });
+  assert.match(output, /webhooks\.html matches/);
+  assert.match(output, /payments\.html matches/);
+});
+
+test('page text before the first anchored heading is published, not dropped', () => {
+  // The splitter used to start at the first anchor, silently discarding the
+  // intro of every page — 5196 characters in total, including the getUpdates vs
+  // setWebhook comparison that opens the webhooks guide.
+  const golden = readFileSync(join(ROOT, 'tests', 'fixtures', 'webhooks.golden.md'), 'utf8');
+  assert.match(golden, /^=== _intro \| section \|/);
+  assert.match(golden, /getUpdates.+setWebhook/);
+});
+
+test('the cache records which converter built it', () => {
+  // Freshness that tracks only upstream would keep a cache built by an older,
+  // buggier converter marked fresh forever. Every fix this session needed a
+  // manual --force precisely because this field did not exist.
+  const metaPath = join(ROOT, 'cache', 'meta.json');
+  if (!existsSync(metaPath)) return;
+
+  const meta = JSON.parse(readFileSync(metaPath, 'utf8'));
+  const script = readFileSync(SCRIPT);
+  const expected = createHash('sha256').update(script).digest('hex').slice(0, 16);
+  for (const [key, entry] of Object.entries(meta)) {
+    if (!entry.dir) continue;
+    assert.equal(entry.converter, expected, `${key} was built by a different converter`);
+  }
 });
 
 test('cold start creates a missing cache directory', () => {

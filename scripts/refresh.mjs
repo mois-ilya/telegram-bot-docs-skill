@@ -46,9 +46,19 @@ import {
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const SKILL_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const SCRIPT_PATH = fileURLToPath(import.meta.url);
+const SKILL_ROOT = join(dirname(SCRIPT_PATH), '..');
 const DEFAULT_CACHE_DIR = join(SKILL_ROOT, 'cache');
 const DEFAULT_MAX_AGE_S = 86_400; // 24 h
+const FIXTURE_DIR = join(SKILL_ROOT, 'tests', 'fixtures');
+
+// "Fresh" cannot mean only "upstream is unchanged": a cache built by an earlier,
+// buggier converter would then stay fresh forever. Hashing this file makes any
+// edit to the converter invalidate every cached page automatically, so applying
+// a fix never depends on someone remembering to pass --force. A rebuild costs
+// ~1.5 s per page, which is cheap enough that invalidating on a comment change
+// is not worth avoiding.
+const CONVERTER_HASH = createHash('sha256').update(readFileSync(SCRIPT_PATH)).digest('hex').slice(0, 16);
 
 // --- CLI args ---------------------------------------------------------------
 
@@ -61,6 +71,9 @@ Options:
   --cache-dir <path>    Generated cache directory (default: <skill>/cache)
   --print-cache-dir     Print the resolved cache directory and exit
   --self-test           Run offline converter regression checks and exit
+  --golden              Convert the saved test fixtures offline and diff against
+                        their recorded output; exit non-zero on any difference
+  --update-golden       Re-record the fixture output after an intended change
   -h, --help            Show this help and exit`;
 }
 
@@ -70,6 +83,8 @@ let maxAgeS = DEFAULT_MAX_AGE_S;
 let cacheDirArg = DEFAULT_CACHE_DIR;
 let printCacheDir = false;
 let selfTest = false;
+let golden = false;
+let updateGolden = false;
 
 for (let i = 0; i < args.length; i++) {
   const arg = args[i];
@@ -93,6 +108,11 @@ for (let i = 0; i < args.length; i++) {
     printCacheDir = true;
   } else if (arg === '--self-test') {
     selfTest = true;
+  } else if (arg === '--golden') {
+    golden = true;
+  } else if (arg === '--update-golden') {
+    golden = true;
+    updateGolden = true;
   } else if (arg === '--help' || arg === '-h') {
     console.log(usage());
     process.exit(0);
@@ -515,6 +535,24 @@ const FIDELITY_MIN_CHARS = 40;
 // sits clear of both.
 const FIDELITY_MIN_RATIO = 0.85;
 
+// Page text that precedes the first anchored heading is published under this
+// reserved anchor. Telegram's own anchors are lowercase words joined by hyphens
+// (`recent-changes`, `star-pricing`) and one page already uses `overview` for a
+// real section, so the leading underscore both avoids a collision today and
+// marks the file as generated rather than mirrored.
+const INTRO_ANCHOR = '_intro';
+const INTRO_TITLE = 'Introduction';
+const INTRO_MIN_CHARS = 40;
+
+// Whole-page accounting tolerance. Measured across all ten pages the kept ratio
+// is 0.998-1.005 — it can exceed 1.0 because image alt text exists only on the
+// markdown side. Dropping the intros alone scored 0.968 on the webhooks page and
+// 0.961 on payments, so 0.98 separates the two cleanly. Note the limit of a
+// ratio: on the 389k-character Bot API page the same defect cost 0.05% and would
+// have passed. Exact coverage is asserted separately in splitSections; this
+// guard exists for loss that coverage cannot see, inside the converter.
+const MASS_MIN_RATIO = 0.98;
+
 if (selfTest) {
   const BASE = 'https://core.telegram.org/bots/api';
   const inlineCases = [
@@ -590,6 +628,83 @@ if (selfTest) {
   process.exit(0);
 }
 
+// --- Golden fixtures ----------------------------------------------------------
+
+// Whole real pages, saved verbatim, converted offline and diffed against their
+// recorded output. The self-test above checks hand-written fragments, which only
+// exercise the markup someone already thought to write down; every defect found
+// in this converter so far came from markup nobody had thought of. These two
+// pages between them carry the structures that broke it: a 95-row table, shell
+// snippets nested inside list items, videos, content images and emoji sprites.
+// Frozen input means the recorded output changes only when the converter does.
+const GOLDEN_FIXTURES = [
+  { file: 'webhooks.html', url: 'https://core.telegram.org/bots/webhooks', prose: true },
+  { file: 'payments.html', url: 'https://core.telegram.org/bots/payments', prose: true },
+];
+
+function renderGolden(sections) {
+  return sections
+    .map((s) =>
+      [
+        `=== ${s.anchor} | ${s.kind} | h${s.level} | parent=${s.parent ?? '-'} ===`,
+        `# ${s.title}`,
+        '',
+        s.md,
+        '',
+      ].join('\n'),
+    )
+    .join('\n');
+}
+
+if (golden) {
+  let failed = 0;
+  for (const fixture of GOLDEN_FIXTURES) {
+    const htmlPath = join(FIXTURE_DIR, fixture.file);
+    const goldenPath = join(FIXTURE_DIR, `${fixture.file.replace(/\.html$/, '')}.golden.md`);
+    if (!existsSync(htmlPath)) {
+      console.error(`golden: missing fixture ${htmlPath}`);
+      process.exit(1);
+    }
+    let actual;
+    try {
+      // Guards included: a fixture that stops converting cleanly must fail the
+      // test rather than silently re-record a degraded page.
+      actual = renderGolden(splitSections(contentRegion(readFileSync(htmlPath, 'utf8')), fixture.url, fixture.prose));
+    } catch (err) {
+      console.error(`golden: ${fixture.file} failed to convert: ${err.message}`);
+      failed++;
+      continue;
+    }
+    if (updateGolden) {
+      writeFileSync(goldenPath, actual);
+      console.log(`golden: recorded ${fixture.file} (${actual.length} bytes)`);
+      continue;
+    }
+    const expected = existsSync(goldenPath) ? readFileSync(goldenPath, 'utf8') : null;
+    if (expected === null) {
+      console.error(`golden: no recorded output for ${fixture.file} — run --update-golden`);
+      failed++;
+      continue;
+    }
+    if (actual === expected) {
+      console.log(`golden: ${fixture.file} matches (${(actual.match(/^=== /gm) ?? []).length} sections)`);
+      continue;
+    }
+    const a = actual.split('\n');
+    const b = expected.split('\n');
+    const at = a.findIndex((line, i) => line !== b[i]);
+    console.error(
+      `golden: ${fixture.file} differs from recorded output at line ${at + 1}\n` +
+        `  expected: ${JSON.stringify(b[at] ?? '<end of file>')}\n` +
+        `  actual:   ${JSON.stringify(a[at] ?? '<end of file>')}\n` +
+        `  (${b.length} recorded lines vs ${a.length} produced)\n` +
+        '  If the change is intended, rerun with --update-golden and review the diff.',
+    );
+    failed++;
+  }
+  process.exit(failed > 0 ? 1 : 0);
+}
+
 // --- Page splitting -----------------------------------------------------------
 
 /** Extract the documentation content region of a core.telegram.org page. */
@@ -597,7 +712,12 @@ function contentRegion(html) {
   const start = html.indexOf('id="dev_page_content"');
   const end = html.indexOf('<div class="footer_wrap"');
   if (start === -1) throw new Error('page layout changed: no dev_page_content');
-  return html.slice(start, end === -1 ? undefined : end);
+  // Start past the end of the container's own opening tag. Slicing from the
+  // attribute would leave `id="dev_page_content">` as bare text ahead of the
+  // first tag, which the converter would faithfully carry into the output.
+  const openEnd = html.indexOf('>', start);
+  if (openEnd === -1) throw new Error('page layout changed: unterminated dev_page_content tag');
+  return html.slice(openEnd + 1, end === -1 ? undefined : end);
 }
 
 function classifySection(anchor, title, level, parentAnchor, prose) {
@@ -647,6 +767,7 @@ function splitSections(region, baseUrl, prose = false) {
       title: inlineToMd(m[3], baseUrl).trim(),
       start: m.index,
       bodyStart: m.index + m[0].length,
+      headLen: m[0].length,
     });
   }
   // Every h3/h4 in the region is expected to be an anchor heading. A mismatch
@@ -658,15 +779,54 @@ function splitSections(region, baseUrl, prose = false) {
       `parsed ${marks.length} of ${rawHeadingCount} h3/h4 headings — markup may have changed`,
     );
   }
+  // Everything before the first anchored heading belongs to no section, so the
+  // per-section guards below are structurally blind to it — and it is not
+  // filler: the webhooks page opens with 1088 characters comparing getUpdates
+  // and setWebhook. Carry it as one synthetic section that goes through exactly
+  // the same conversion and guards as the real ones.
+  const firstStart = marks.length > 0 ? marks[0].start : region.length;
+  const introHtml = region.slice(0, firstStart);
+  const segments = marks.map((mark, i) => ({
+    ...mark,
+    bodyHtml: region.slice(mark.bodyStart, i + 1 < marks.length ? marks[i + 1].start : region.length),
+  }));
+  if (htmlBodyLength(introHtml) >= INTRO_MIN_CHARS) {
+    if (marks.some((mark) => mark.anchor === INTRO_ANCHOR)) {
+      throw new Error(`page now defines an anchor named "${INTRO_ANCHOR}", which is reserved`);
+    }
+    segments.unshift({
+      level: 3,
+      anchor: INTRO_ANCHOR,
+      title: INTRO_TITLE,
+      synthetic: true,
+      bodyHtml: introHtml,
+    });
+  }
+  // Exact coverage. The segment ranges must tile the region: every byte belongs
+  // to a heading tag, to a segment that gets converted, or to a sub-threshold
+  // intro deliberately skipped just above. This is the zero-tolerance form of
+  // the accounting the ratio guard at the end does statistically, and it is what
+  // makes "content reached no section" impossible to reintroduce unnoticed — a
+  // future refactor of the range arithmetic breaks this before it ships.
+  const skippedIntro = segments.some((s) => s.synthetic) ? 0 : introHtml.length;
+  const accounted =
+    skippedIntro +
+    segments.reduce((n, s) => n + s.bodyHtml.length, 0) +
+    marks.reduce((n, mark) => n + mark.headLen, 0);
+  if (accounted !== region.length) {
+    throw new Error(
+      `splitter covered ${accounted} of ${region.length} bytes — ` +
+        `${region.length - accounted} bytes of the page belong to no section`,
+    );
+  }
+
   const sections = [];
   const fidelity = [];
   const structural = [];
   let currentH3 = null;
-  for (let i = 0; i < marks.length; i++) {
-    const mark = marks[i];
-    const bodyEnd = i + 1 < marks.length ? marks[i + 1].start : region.length;
+  for (const mark of segments) {
+    const bodyHtml = mark.bodyHtml;
     if (mark.level === 3) currentH3 = mark.anchor;
-    const bodyHtml = region.slice(mark.bodyStart, bodyEnd);
     const md = blockToMd(bodyHtml, baseUrl);
     const htmlLen = htmlBodyLength(bodyHtml);
     if (htmlLen >= FIDELITY_MIN_CHARS) {
@@ -689,7 +849,10 @@ function splitSections(region, baseUrl, prose = false) {
       title: mark.title,
       level: mark.level,
       parent: mark.level === 4 ? currentH3 : null,
-      kind: classifySection(mark.anchor, mark.title, mark.level, mark.level === 4 ? currentH3 : null, prose),
+      kind: mark.synthetic
+        ? 'section'
+        : classifySection(mark.anchor, mark.title, mark.level, mark.level === 4 ? currentH3 : null, prose),
+      synthetic: mark.synthetic === true,
       md,
       summary: summary.length > 160 ? `${summary.slice(0, 157)}...` : summary,
     });
@@ -718,6 +881,22 @@ function splitSections(region, baseUrl, prose = false) {
     throw new Error(
       `body text lost in ${lost.length} of ${fidelity.length} measurable sections — ` +
         `the converter may not handle the current markup: ${worst}`,
+    );
+  }
+  // Conservation of mass. Both guards above weigh section bodies against section
+  // bodies, so neither can see text that ended up in no section at all — which
+  // is precisely how the dropped page intros survived two full audits. This
+  // weighs the whole page against everything written out, and is the only guard
+  // that closes over content the splitter never claimed.
+  const pageMass = htmlBodyLength(region);
+  const keptMass = sections.reduce(
+    (sum, s) => sum + markdownBodyLength(s.md) + alnumCount(s.title),
+    0,
+  );
+  if (pageMass > 0 && keptMass / pageMass < MASS_MIN_RATIO) {
+    throw new Error(
+      `${pageMass - keptMass} of ${pageMass} characters on the page reached no section ` +
+        `(${Math.round((keptMass / pageMass) * 100)}% kept) — the splitter is discarding content`,
     );
   }
   return sections;
@@ -759,10 +938,12 @@ function writeSections(source, sections) {
   rmSync(tmp, { recursive: true, force: true });
   mkdirSync(tmp, { recursive: true });
   for (const s of sections) {
+    // The synthetic intro has no anchor upstream, so it must cite the page
+    // itself — a "#_intro" fragment would be a link that does not resolve.
     const header = [
       `# ${s.title}`,
       '',
-      `> Source: ${source.url}#${s.anchor} (official Telegram documentation)`,
+      `> Source: ${source.url}${s.synthetic ? '' : `#${s.anchor}`} (official Telegram documentation)`,
       `> Kind: ${s.kind}`,
       '',
       '',
@@ -891,7 +1072,11 @@ for (const source of SOURCES) {
   const entry = meta[source.key];
   const hasCache = Boolean(entry?.hash) && existsSync(join(CACHE_DIR, source.dir));
 
-  if (!force && hasCache && entry.checkedAt) {
+  // A converter change must take effect on the next run, not after the TTL
+  // expires, so it bypasses the offline fast path as well.
+  const builtByThisConverter = entry?.converter === CONVERTER_HASH;
+
+  if (!force && hasCache && builtByThisConverter && entry.checkedAt) {
     const ageS = (Date.now() - new Date(entry.checkedAt).getTime()) / 1000;
     if (ageS < maxAgeS) {
       console.log(
@@ -929,9 +1114,10 @@ for (const source of SOURCES) {
   const now = new Date().toISOString();
   const version = source.key === 'botapi' ? extractVersion(region) : null;
 
-  // --force must rebuild even on an unchanged page: the converter itself may
-  // have changed, and a rebuild is the only way to apply it to the cache.
-  if (hasCache && entry.hash === hash && !force) {
+  // An unchanged page is only reason to skip the rebuild if the cache was also
+  // produced by the converter running now; otherwise the files on disk are the
+  // old converter's output and have to be regenerated.
+  if (hasCache && entry.hash === hash && builtByThisConverter && !force) {
     entry.checkedAt = now;
     metaDirty = true;
     console.log(
@@ -962,6 +1148,9 @@ for (const source of SOURCES) {
     dir: source.dir,
     version,
     hash,
+    // Which build of the converter produced these files; a mismatch on a later
+    // run forces a rebuild even when the page itself has not changed.
+    converter: CONVERTER_HASH,
     fetchedAt: now,
     checkedAt: now,
     sectionCount: sections.length,
@@ -972,8 +1161,11 @@ for (const source of SOURCES) {
   // Persist immediately so a failure in a later source never orphans this one.
   persist();
   const prev = entry?.version;
+  // Distinguish "Telegram published something new" from "we rebuilt because the
+  // converter changed" — otherwise a converter bump looks like a docs update.
+  const cause = hasCache && entry.hash === hash && !builtByThisConverter ? 'converter changed, ' : '';
   console.log(
-    `${source.label}: refreshed (${prev && version && prev !== version ? `Bot API ${prev} → ${version}, ` : version ? `Bot API ${version}, ` : ''}${sections.length} sections)`,
+    `${source.label}: refreshed (${cause}${prev && version && prev !== version ? `Bot API ${prev} → ${version}, ` : version ? `Bot API ${version}, ` : ''}${sections.length} sections)`,
   );
 }
 
