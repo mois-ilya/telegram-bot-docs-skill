@@ -294,15 +294,71 @@ function tableToMd(html, baseUrl) {
   return [line(rows[0]), line(Array(width).fill('---')), ...rows.slice(1).map(line)].join('\n');
 }
 
+/**
+ * Index of the closing tag for an element whose body starts at `from`,
+ * counting nested elements of the same name. A non-greedy `<ul>(.*?)</ul>`
+ * stops at the *inner* `</ul>` of a nested list and silently truncates
+ * everything after it — that is a real defect this replaces, not a hypothetical.
+ */
+function findClose(html, from, tag) {
+  const re = new RegExp(`<(/?)${tag}\\b[^>]*>`, 'gi');
+  re.lastIndex = from;
+  let depth = 0;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    if (m[1] === '/') {
+      if (depth === 0) return m.index;
+      depth -= 1;
+    } else {
+      depth += 1;
+    }
+  }
+  return -1;
+}
+
+/** Split a list body into top-level <li> bodies, skipping nested lists. */
+function splitListItems(html) {
+  const items = [];
+  const re = /<(\/?)(ul|ol|li)\b[^>]*>/gi;
+  let depth = 0;
+  let start = -1;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    const closing = m[1] === '/';
+    const tag = m[2].toLowerCase();
+    if (tag === 'li') {
+      if (depth > 0) continue;
+      if (!closing) {
+        // HTML allows an omitted </li>; a new opening tag closes the previous item.
+        if (start !== -1) items.push(html.slice(start, m.index));
+        start = m.index + m[0].length;
+      } else if (start !== -1) {
+        items.push(html.slice(start, m.index));
+        start = -1;
+      }
+    } else if (start !== -1) {
+      depth += closing ? -1 : 1;
+      if (depth < 0) depth = 0;
+    }
+  }
+  if (start !== -1) items.push(html.slice(start));
+  return items;
+}
+
 /** Convert a block of section HTML to markdown. */
 function blockToMd(html, baseUrl) {
   const out = [];
-  // Match top-level blocks in document order.
-  const blockRe =
-    /<(p|table|ul|ol|blockquote|pre|h[56]|div)(?:\s[^>]*)?>(.*?)<\/\1>/gs;
+  // Match top-level blocks in document order. Each block is consumed whole via
+  // findClose, so nesting cannot truncate it, and the scan resumes past its end.
+  const openRe = /<(p|table|ul|ol|blockquote|pre|h[56]|div)(?:\s[^>]*)?>/gi;
   let m;
-  while ((m = blockRe.exec(html)) !== null) {
-    const [, tag, inner] = m;
+  while ((m = openRe.exec(html)) !== null) {
+    const tag = m[1].toLowerCase();
+    const bodyStart = m.index + m[0].length;
+    const closeAt = findClose(html, bodyStart, tag);
+    if (closeAt === -1) continue;
+    const inner = html.slice(bodyStart, closeAt);
+    openRe.lastIndex = closeAt + tag.length + 3; // past "</tag>"
     switch (tag) {
       case 'p':
         out.push(inlineToMd(inner, baseUrl).trim());
@@ -312,9 +368,19 @@ function blockToMd(html, baseUrl) {
         break;
       case 'ul':
       case 'ol': {
-        const items = [...inner.matchAll(/<li>(.*?)<\/li>/gs)].map((li, i) => {
+        const items = splitListItems(inner).map((raw, i) => {
           const marker = tag === 'ul' ? '-' : `${i + 1}.`;
-          return `${marker} ${inlineToMd(li[1], baseUrl).trim().replace(/\n/g, '\n  ')}`;
+          // A nested list becomes an indented sub-list; the text before it is
+          // this item's own content.
+          const nestedAt = raw.search(/<(?:ul|ol)\b/i);
+          const own = nestedAt === -1 ? raw : raw.slice(0, nestedAt);
+          const head = `${marker} ${inlineToMd(own, baseUrl).trim().replace(/\n/g, '\n  ')}`;
+          if (nestedAt === -1) return head;
+          const sub = blockToMd(raw.slice(nestedAt), baseUrl)
+            .split('\n')
+            .map((l) => (l ? `  ${l}` : l))
+            .join('\n');
+          return sub ? `${head}\n${sub}` : head;
         });
         out.push(items.join('\n'));
         break;
@@ -356,6 +422,38 @@ function blockToMd(html, baseUrl) {
   return out.filter(Boolean).join('\n\n');
 }
 
+// --- Body fidelity ------------------------------------------------------------
+
+/**
+ * Counts letters and digits only. Markdown syntax (pipes, fences, brackets,
+ * list markers, emphasis) is punctuation, so this compares the actual words on
+ * both sides rather than the formatting wrapped around them.
+ */
+function alnumCount(s) {
+  return (s.match(/[\p{L}\p{N}]/gu) ?? []).length;
+}
+
+function htmlBodyLength(html) {
+  return alnumCount(decodeEntities(html.replace(/<[^>]+>/g, ' ')));
+}
+
+function markdownBodyLength(md) {
+  // Link targets exist only on the markdown side; counting them would let a
+  // link-heavy section hide prose the converter dropped.
+  return alnumCount(md.replace(/\]\([^)]*\)/g, ']'));
+}
+
+// Below this the ratio is dominated by noise: heading-only sections, one-line
+// stubs, and bodies that are a single image.
+const FIDELITY_MIN_CHARS = 40;
+
+// Conversion legitimately loses a little text: an <a href="X">X</a> shown in an
+// example collapses into one markdown link, so the URL is counted once here and
+// twice on the HTML side. The measured floor across all ~970 sections is 0.93,
+// while the nested-list defect this guard was written for scored 0.67 — 0.85
+// sits clear of both.
+const FIDELITY_MIN_RATIO = 0.85;
+
 if (selfTest) {
   const BASE = 'https://core.telegram.org/bots/api';
   const inlineCases = [
@@ -376,6 +474,18 @@ if (selfTest) {
     // The fence must outgrow any backtick run in the content — the docs' own
     // Markdown examples contain literal ``` lines inside <pre>.
     ['<pre><code>a\n```\nb</code></pre>', '````\na\n```\nb\n````'],
+    // A nested list must not truncate its parent at the inner </ul>: this ate
+    // four top-level entries of the Bot Features navigation list in practice.
+    [
+      '<ul><li><b>A</b><ul><li>a1</li></ul></li><li><b>B</b></li></ul>',
+      '- **A**\n  - a1\n- **B**',
+    ],
+    // Sibling blocks after a nested list must still be reached.
+    ['<ul><li>x<ul><li>y</li></ul></li></ul><p>after</p>', '- x\n  - y\n\nafter'],
+    // An omitted </li> still closes the previous item.
+    ['<ul><li>one<li>two</ul>', '- one\n- two'],
+    // Ordered lists keep their numbering across nesting.
+    ['<ol><li>one<ol><li>inner</li></ol></li><li>two</li></ol>', '1. one\n  1. inner\n2. two'],
   ];
   const checks = [
     ...inlineCases.map(([html, expected]) => [html, expected, inlineToMd]),
@@ -461,12 +571,18 @@ function splitSections(region, baseUrl, prose = false) {
     );
   }
   const sections = [];
+  const fidelity = [];
   let currentH3 = null;
   for (let i = 0; i < marks.length; i++) {
     const mark = marks[i];
     const bodyEnd = i + 1 < marks.length ? marks[i + 1].start : region.length;
     if (mark.level === 3) currentH3 = mark.anchor;
-    const md = blockToMd(region.slice(mark.bodyStart, bodyEnd), baseUrl);
+    const bodyHtml = region.slice(mark.bodyStart, bodyEnd);
+    const md = blockToMd(bodyHtml, baseUrl);
+    const htmlLen = htmlBodyLength(bodyHtml);
+    if (htmlLen >= FIDELITY_MIN_CHARS) {
+      fidelity.push({ anchor: mark.anchor, ratio: markdownBodyLength(md) / htmlLen, htmlLen });
+    }
     const firstPara = md.split('\n\n').find((b) => b && !b.startsWith('|') && !b.startsWith('```'));
     const summary = (firstPara ?? '').replace(/\n/g, ' ').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
     sections.push({
@@ -478,6 +594,22 @@ function splitSections(region, baseUrl, prose = false) {
       md,
       summary: summary.length > 160 ? `${summary.slice(0, 157)}...` : summary,
     });
+  }
+  // The heading guard above proves every section was *found*; this proves each
+  // one was carried over *whole*. Without it a converter that silently drops
+  // part of a body still reports "fresh", which is the one way this cache can
+  // mislead without any visible symptom.
+  const lost = fidelity.filter((f) => f.ratio < FIDELITY_MIN_RATIO);
+  if (lost.length > 0) {
+    const worst = [...lost]
+      .sort((a, b) => a.ratio - b.ratio)
+      .slice(0, 5)
+      .map((f) => `${f.anchor} (${Math.round(f.ratio * 100)}%)`)
+      .join(', ');
+    throw new Error(
+      `body text lost in ${lost.length} of ${fidelity.length} measurable sections — ` +
+        `the converter may not handle the current markup: ${worst}`,
+    );
   }
   return sections;
 }
