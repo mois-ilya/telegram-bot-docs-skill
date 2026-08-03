@@ -42,19 +42,30 @@ cached page automatically on the next run — a cache built by an older, buggier
 can never stay marked `fresh`, and applying a fix never depends on someone remembering
 to pass `--force`.
 
-Four guards decide whether a rebuild may be published, and each catches what the
-previous ones cannot:
+Guards decide whether a rebuild may be published, and each catches what the previous
+ones cannot. All of them have been observed firing on a deliberately reintroduced
+defect — a guard never seen red is not a guard:
 
 1. **Headings** — refuses when the number of parsed sections does not match the number
    of headings on the page. Proves every section was *found*.
 2. **Body fidelity** — compares the visible text of each section's HTML against the
    Markdown produced from it, refusing when a section lost more than 15%. Proves each
    section was carried over *whole*.
-3. **Block structure** — counts tables and code blocks on both sides. Text volume
-   cannot see a table flattened into a paragraph or a code block mashed into prose:
-   every character survives while the rows, columns and fences are destroyed. Most
-   defects found in this converter had exactly that shape.
-4. **Conservation of mass** — weighs the whole page against everything written out,
+3. **Block structure** — counts tables, code blocks and table *rows* on both sides.
+   Text volume cannot see a table flattened into a paragraph or a code block mashed
+   into prose: every character survives while the rows, columns and fences are
+   destroyed. Rows are compared exactly rather than by ratio, because across 573
+   sections containing tables the Markdown line count equals `<tr>` plus one
+   separator per table with no exceptions. Counting whole tables alone let a single
+   dropped row through, which once deleted a 95-row table's header and promoted the
+   first data row into its place — still valid Markdown, no longer true.
+4. **Inline categories** — compares link and code-span counts page-wide. When a tag
+   pattern stops matching, an entire category disappears at once rather than
+   gradually, and nothing above can see it: link targets are excluded from the text
+   comparison by design, and emphasis and backticks are punctuation no character
+   count weighs. These thresholds are deliberately loose; they detect catastrophe,
+   not attrition.
+5. **Conservation of mass** — weighs the whole page against everything written out,
    byte-exactly for splitter coverage and by ratio for converted text. Guards 2 and 3
    compare section bodies against section bodies, so neither can see content that
    ended up in *no* section — which is how the intro of every page went missing
@@ -74,10 +85,17 @@ markup rather than over fragments someone thought to write down. Re-record with
 
 ## Distribution model
 
-This repository does **not** redistribute Telegram documentation. Generated cache
-contents are ignored by Git; each installation downloads and builds its own private
-cache from the official Telegram documentation pages. Only `cache/.gitkeep` is
-distributed so the directory exists immediately after installation.
+The generated cache is **not** redistributed. Its contents are ignored by Git; each
+installation downloads and builds its own private copy from the official Telegram
+documentation pages, and only `cache/.gitkeep` ships so the directory exists
+immediately after installation.
+
+Three files under `tests/fixtures/` are the exception: they are verbatim copies of
+three official pages, checked in together with their converted output so the golden
+test can run offline and deterministically. They are test data, not the cache, and
+are never read at runtime. Everything else in this repository — the skill
+instructions, scripts and tests — is the project's own work and is what the LICENSE
+covers; the fixture pages and their conversions remain Telegram's content.
 
 ## Layout
 

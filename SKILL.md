@@ -55,11 +55,17 @@ docs actually changed. Interpret the one-line-per-source output:
   user's question is specifically about a change from the last day (or they insist on
   live verification), rerun with `--max-age 0`.
 - `STALE` (exit code 2) → verification was impossible right now (network down, page
-  layout changed, or another refresh is running); the cache may lag behind the
-  official docs. You may still use it, but you must tell the user the answer is based
-  on a cache from the printed date that could not be verified.
-- `FATAL` (exit code 1) → no usable cache and no way to build one. Do not guess from
-  memory; tell the user you cannot verify Telegram documentation right now.
+  layout changed, the cache directory is not writable, or another refresh is running);
+  the cache may lag behind the official docs. You may still use it, but you must tell
+  the user the answer is based on a cache from the printed date that could not be
+  verified.
+- `FATAL` (exit code 1) → at least one source has no usable cache and no way to build
+  one. **Read the lines, not just the exit code**: the status is per source, and the
+  exit code is the worst one. A `FATAL` on Games says nothing about Bot API, which may
+  well be `refreshed` on the line above. Answer from the sources whose own line is
+  `fresh` or `refreshed`; only if the source your question actually needs is `FATAL`,
+  say you cannot verify Telegram documentation right now rather than guessing from
+  memory.
 
 When the user explicitly asks to refresh/update the Telegram docs (any phrasing), run
 with `--force` and report what changed.

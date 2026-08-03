@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -58,6 +58,44 @@ test('the cache records which converter built it', () => {
   for (const [key, entry] of Object.entries(meta)) {
     if (!entry.dir) continue;
     assert.equal(entry.converter, expected, `${key} was built by a different converter`);
+  }
+});
+
+test('a closed stdout does not leave the lock behind', () => {
+  // Piping into `head` used to raise an unhandled EPIPE, killing the run with
+  // the lock directory still in place; every invocation for the next five
+  // minutes then reported STALE and the agent passed that on to the user as a
+  // failed verification that had in fact just succeeded.
+  const tempRoot = mkdtempSync(join(tmpdir(), 'telegram-docs-test-'));
+  const cacheDir = join(tempRoot, 'cache');
+  try {
+    const result = spawnSync(
+      'sh',
+      ['-c', `"${process.execPath}" "${SCRIPT}" --cache-dir "${cacheDir}" --help | head -1`],
+      { encoding: 'utf8' },
+    );
+    assert.equal(result.status, 0);
+    assert.equal(existsSync(join(cacheDir, '.refresh-lock')), false, 'lock directory leaked');
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('an interrupted directory swap is recovered before meta is read', () => {
+  // The recovery used to live inside the swap itself, which only runs after a
+  // successful download and conversion — so offline, a complete cache sitting
+  // in <dir>.backup was invisible and the run reported FATAL beside intact data.
+  const tempRoot = mkdtempSync(join(tmpdir(), 'telegram-docs-test-'));
+  const cacheDir = join(tempRoot, 'cache');
+  try {
+    mkdirSync(join(cacheDir, 'bot-api.backup'), { recursive: true });
+    writeFileSync(join(cacheDir, 'bot-api.backup', 'sendmessage.md'), '# sendMessage\n');
+    writeFileSync(join(cacheDir, 'meta.json.backup'), '{"botapi":{"dir":"bot-api"}}\n');
+    execFileSync(process.execPath, [SCRIPT, '--cache-dir', cacheDir, '--self-test']);
+    assert.ok(existsSync(join(cacheDir, 'bot-api', 'sendmessage.md')), 'section dir not restored');
+    assert.ok(existsSync(join(cacheDir, 'meta.json')), 'meta.json not restored');
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
   }
 });
 

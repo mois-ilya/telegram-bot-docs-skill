@@ -298,7 +298,7 @@ Enter keystore password:
 ---
 ```
 
-To validate your certificate the Common Name (CN) has to match your webhook domain. Example, if you’re using [https://www.example.com/example.php](https://www.example.com/example.php) as a webhook address, the certificate CN has to be [www.example.com](http://www.example.com).  
+To validate your certificate the Common Name (CN) has to match your webhook domain. Example, if you’re using [https://www.example.com/example.php](https://www.example.com/example.php) as a webhook address, the certificate CN has to be [www.example.com](http://www.example.com/).  
 So you need an **exact match** of the FQDN you’re setting for the webhook
 
 There is an exception, if you’re using a SAN (Subject Alternative Name) the webhook address can either match the CN of your certificate, **OR** one of the SANs provided in the certificate. In most cases you’ll be using the CN.

@@ -216,11 +216,50 @@ const SOURCES = [
   },
 ];
 
+/**
+ * Reinstate anything left behind by a replacement that was interrupted between
+ * its two renames. This recovery used to live inside replaceWithRollback, which
+ * only runs after a successful download and conversion — so offline, a complete
+ * cache sitting in `<dir>.backup` was invisible and the run reported FATAL with
+ * the real data intact beside it.
+ *
+ * Runs before meta.json is read, since the only good copy of it may itself be a
+ * backup, and an empty meta makes every source look uncached.
+ */
+function recoverBackups() {
+  const targets = [...SOURCES.map((s) => join(CACHE_DIR, s.dir)), META_PATH, INDEX_PATH];
+  for (const target of targets) {
+    const backup = `${target}.backup`;
+    if (!existsSync(backup)) continue;
+    try {
+      if (existsSync(target)) rmSync(backup, { recursive: true, force: true });
+      else renameSync(backup, target);
+    } catch {
+      // A read-only cache cannot be repaired; the guards still report honestly
+      // on whatever is readable.
+    }
+  }
+}
+recoverBackups();
+
 // --- HTML → markdown --------------------------------------------------------
 
+// An unlisted entity used to survive as its literal source text, and no ratio
+// guard could notice: "&hellip;" counts as the six letters "hellip" on both the
+// HTML and the Markdown side, so fidelity reads a perfect 1.000 while the cache
+// shows readers a raw entity.
 const ENTITIES = {
-  '&lt;': '<', '&gt;': '>', '&amp;': '&', '&quot;': '"', '&#39;': "'",
+  '&lt;': '<', '&gt;': '>', '&amp;': '&', '&quot;': '"', '&apos;': "'",
   '&nbsp;': ' ', '&raquo;': '»', '&laquo;': '«', '&mdash;': '—', '&ndash;': '–',
+  '&hellip;': '…', '&lsquo;': '‘', '&rsquo;': '’', '&ldquo;': '“', '&rdquo;': '”',
+  '&times;': '×', '&divide;': '÷', '&plusmn;': '±', '&deg;': '°', '&middot;': '·',
+  '&bull;': '•', '&dagger;': '†', '&sect;': '§', '&para;': '¶', '&copy;': '©',
+  '&reg;': '®', '&trade;': '™', '&euro;': '€', '&pound;': '£', '&yen;': '¥',
+  '&cent;': '¢', '&larr;': '←', '&rarr;': '→', '&uarr;': '↑', '&darr;': '↓',
+  '&harr;': '↔', '&ne;': '≠', '&le;': '≤', '&ge;': '≥', '&minus;': '−',
+  '&frac12;': '½', '&frac14;': '¼', '&frac34;': '¾', '&sup2;': '²', '&sup3;': '³',
+  '&alpha;': 'α', '&beta;': 'β', '&infin;': '∞', '&ensp;': ' ', '&emsp;': ' ',
+  '&thinsp;': ' ', '&shy;': '', '&zwj;': '‍', '&zwnj;': '‌',
 };
 
 function decodeEntities(s) {
@@ -250,11 +289,38 @@ function markdownCodeSpan(value) {
   return `${fence}${pad}${singleLine}${pad}${fence}`;
 }
 
-function absolutize(href) {
-  if (href.startsWith('http')) return href;
-  if (href.startsWith('#')) return `https://core.telegram.org/bots/api${href}`;
-  if (href.startsWith('/')) return `https://core.telegram.org${href}`;
-  return href;
+/**
+ * Attribute value from an opening tag, tolerating single quotes and unquoted
+ * values. Hand-written `\battr="([^"]*)"` matchers silently returned nothing
+ * for the other two forms, which HTML permits everywhere.
+ */
+function attr(tag, name) {
+  const m = tag.match(new RegExp(`\\b${name}\\s*=\\s*("[^"]*"|'[^']*'|[^\\s"'>]+)`, 'i'));
+  if (!m) return undefined;
+  const raw = m[1];
+  const value = raw[0] === '"' || raw[0] === "'" ? raw.slice(1, -1) : raw;
+  return decodeEntities(value);
+}
+
+/**
+ * Resolve a URL found on a documentation page against that page.
+ *
+ * This was hand-rolled prefix matching, which passed document-relative hrefs
+ * through untouched — 23 links such as `[Mini Apps](webapps)` shipped in the
+ * cache, pointing at paths that do not exist once a page is split into
+ * per-section files — and turned protocol-relative `//host/x` into
+ * `https://core.telegram.org//host/x`. The URL parser handles every form,
+ * including the `#anchor` case that was previously hardcoded to /bots/api
+ * regardless of which page was being converted.
+ */
+function absolutize(href, baseUrl) {
+  try {
+    return new URL(href.trim(), baseUrl ?? 'https://core.telegram.org/bots/api').href;
+  } catch {
+    // A malformed href is content, not a reason to abort the refresh; keep the
+    // original text rather than inventing a target.
+    return href;
+  }
 }
 
 /** Convert inline HTML (inside a paragraph/cell/list item) to markdown. */
@@ -265,35 +331,42 @@ function inlineToMd(html, baseUrl) {
   // a picture) must still leave a reference behind: dropping it removes
   // information silently, and no character count can notice because the tag
   // contributed no text in the first place.
-  s = s.replace(/<img\b[^>]*>/g, (tag) => {
-    const alt = tag.match(/\balt="([^"]*)"/)?.[1] ?? '';
-    const src = tag.match(/\bsrc="([^"]*)"/)?.[1];
+  s = s.replace(/<img\b[^>]*>/gi, (tag) => {
+    const alt = attr(tag, 'alt') ?? '';
+    const src = attr(tag, 'src');
     // Emoji sprites are text, not illustrations: they become their character.
-    const isEmoji = /\bclass="[^"]*\bemoji\b/.test(tag) || (src ?? '').includes('/img/emoji/');
+    const cls = attr(tag, 'class') ?? '';
+    const isEmoji = /\bemoji\b/.test(cls) || (src ?? '').includes('/img/emoji/');
     if (isEmoji || !src) return alt;
-    return `![${alt}](${absolutize(src)})`;
+    return `![${alt}](${absolutize(src, baseUrl)})`;
   });
   // A <video> keeps its media in a nested <source>; neither tag contributes
   // text, so without this the whole player vanishes silently — 23 sections of
   // the guides illustrate a feature with nothing but a video.
   s = s.replace(/<video\b([^>]*)>([\s\S]*?)<\/video>/gi, (_, attrs, inner) => {
-    const src =
-      inner.match(/<source\b[^>]*\bsrc="([^"]*)"/i)?.[1] ?? attrs.match(/\bsrc="([^"]*)"/)?.[1];
-    const poster = attrs.match(/\bposter="([^"]*)"/i)?.[1];
-    if (src) return `[video](${absolutize(src)})`;
-    return poster ? `![](${absolutize(poster)})` : '';
+    const sourceTag = inner.match(/<source\b[^>]*>/i)?.[0] ?? '';
+    const src = attr(sourceTag, 'src') ?? attr(attrs, 'src');
+    const poster = attr(attrs, 'poster');
+    if (src) return `[video](${absolutize(src, baseUrl)})`;
+    return poster ? `![](${absolutize(poster, baseUrl)})` : '';
   });
   // Preserve intentional HTML line breaks separately from source formatting
   // whitespace and numeric entities that describe control characters.
   s = s.replace(/<br\s*\/?>/g, '\u0001');
-  s = s.replace(/<a[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>/gs, (_, href, text) => {
+  s = s.replace(/(<a\b[^>]*>)(.*?)<\/a>/gis, (_, tag, text) => {
+    const href = attr(tag, 'href');
     const inner = inlineToMd(text, baseUrl).trim();
+    if (href === undefined) return inner; // an anchor target, not a link
     if (!inner) return '';
-    const abs = href.startsWith('#') ? `${baseUrl}${href}` : absolutize(href);
-    return `[${inner}](${abs})`;
+    return `[${inner}](${absolutize(href, baseUrl)})`;
   });
-  s = s.replace(/<(?:b|strong)>(.*?)<\/(?:b|strong)>/gs, '**$1**');
-  s = s.replace(/<(?:i|em)>(.*?)<\/(?:i|em)>/gs, '*$1*');
+  // Emphasis tags carry attributes in real markup; matching only the bare form
+  // dropped the markers and left the text looking like ordinary prose. Empty
+  // emphasis emits nothing: the anchor icon before every heading is an <i> with
+  // no content, and turning it into bare markers forges visible text.
+  const emphasize = (marker) => (_, __, body) => (body.trim() ? `${marker}${body}${marker}` : '');
+  s = s.replace(/<(b|strong)\b[^>]*>(.*?)<\/\1>/gis, emphasize('**'));
+  s = s.replace(/<(i|em)\b[^>]*>(.*?)<\/\1>/gis, emphasize('*'));
   // A <mark> badge annotates a name rather than being part of it: plain text
   // turns "signature NEW" into something a reader takes for the field name.
   s = s.replace(/<mark\b[^>]*>(.*?)<\/mark>/gs, '**$1**');
@@ -302,7 +375,7 @@ function inlineToMd(html, baseUrl) {
   // would turn e.g. `&lt;value&gt;` into `<value>` and the stripper would eat
   // it as if it were markup (this silently gutted ~24 cache files once).
   const codeSpans = [];
-  s = s.replace(/<code>(.*?)<\/code>/gs, (_, c) => {
+  s = s.replace(/<code\b[^>]*>(.*?)<\/code>/gis, (_, c) => {
     // A <br> inside the span already became \u0001 above; turn it into a real
     // newline here so markdownCodeSpan escapes it visibly instead of leaking
     // a raw control character into the cache.
@@ -324,10 +397,33 @@ function inlineToMd(html, baseUrl) {
   );
 }
 
+/**
+ * Rows of a table body, in document order.
+ *
+ * Matching `<tr>(.*?)</tr>` recognised only the bare tag, so a single
+ * `<tr class="new">` — exactly how these pages mark something newly added —
+ * dropped that row while leaving the Markdown table structurally valid. In the
+ * 95-row currency table that deleted the header and promoted the first data row
+ * into its place: a table that still looks right and is no longer true. HTML
+ * also permits `</tr>` to be omitted, so a row ends at the next row or at the
+ * end of the table body, whichever comes first.
+ */
+function splitRows(html) {
+  const openRe = /<tr\b[^>]*>/gi;
+  const starts = [...html.matchAll(openRe)];
+  return starts.map((m, i) => {
+    const from = m.index + m[0].length;
+    const explicit = html.slice(from).search(/<\/tr\s*>/i);
+    const nextRow = i + 1 < starts.length ? starts[i + 1].index : html.length;
+    const end = explicit === -1 ? nextRow : Math.min(from + explicit, nextRow);
+    return html.slice(from, end);
+  });
+}
+
 function tableToMd(html, baseUrl) {
-  const rows = [...html.matchAll(/<tr>(.*?)<\/tr>/gs)].map((m) =>
-    [...m[1].matchAll(/<t[hd][^>]*>(.*?)<\/t[hd]>/gs)].map((c) =>
-      inlineToMd(c[1], baseUrl).replace(/[ \t]*\n/g, '<br>').replace(/\|/g, '\\|').trim(),
+  const rows = splitRows(html).map((body) =>
+    [...body.matchAll(/<t([hd])\b[^>]*>([\s\S]*?)(?=<\/t\1\s*>|<t[hd]\b|$)/gi)].map((c) =>
+      inlineToMd(c[2], baseUrl).replace(/[ \t]*\n/g, '<br>').replace(/\|/g, '\\|').trim(),
     ),
   );
   if (rows.length === 0) return '';
@@ -589,10 +685,77 @@ const INTRO_MIN_CHARS = 40;
 // guard exists for loss that coverage cannot see, inside the converter.
 const MASS_MIN_RATIO = 0.98;
 
+// Every guard below was a lower bound only, so duplicated content was invisible
+// to all of them. Measured ceilings: per-section 1.07, whole-page 1.005.
+const FIDELITY_MAX_RATIO = 1.3;
+const MASS_MAX_RATIO = 1.05;
+
+// Catastrophe detectors for whole categories of inline markup. These do not try
+// to notice one lost link; they notice a markup change that makes the converter
+// stop recognising links or code spans at all. That is the observed failure
+// shape: matching only bare tags meant a single added attribute took out every
+// instance at once. Page-level ratios measured across the ten sources are
+// 0.64-1.06 for links and 0.96-1.01 for code spans outside <pre>, against
+// near-zero for the failures these catch, so the floors sit far from both.
+const LINK_MIN_RATIO = 0.4;
+const CODE_MIN_RATIO = 0.6;
+const INLINE_GUARD_MIN_COUNT = 20;
+
+/** Count inline code spans in markdown, skipping fenced blocks. */
+function countCodeSpans(md) {
+  let fence = null;
+  let total = 0;
+  for (const line of md.split('\n')) {
+    const f = line.match(/^[ \t]*(`{3,})(.*)$/);
+    if (f) {
+      if (fence === null) fence = f[1];
+      else if (f[1].length >= fence.length && !f[2].trim()) fence = null;
+      continue;
+    }
+    if (fence === null) total += Math.floor((line.match(/`+/g) ?? []).length / 2);
+  }
+  return total;
+}
+
 if (selfTest) {
   const BASE = 'https://core.telegram.org/bots/api';
   const inlineCases = [
     ['<code>&#10;</code>', '`\\n`'],
+    // Attribute tolerance. Every one of these tags matched only in its bare
+    // form once, so a single added class silently deleted a whole category of
+    // content while every guard still passed: a highlighted table row vanished,
+    // code spans became plain text, bold markers disappeared. Telegram adding a
+    // class to mark something new is routine, so this is drift, not paranoia.
+    ['<code class="tg">x</code>', '`x`'],
+    ['<strong class="x">bold</strong>', '**bold**'],
+    ['<em data-k="1">it</em>', '*it*'],
+    ['<mark>NEW</mark>', '**NEW**'],
+    // Empty emphasis must vanish, not emit bare markers. Every heading on these
+    // pages is preceded by <a class="anchor"><i class="anchor-icon"></i></a>;
+    // once the emphasis rules learned to tolerate attributes, that icon started
+    // producing "**", which in turn made the surrounding anchor look like a link
+    // with visible text and put "[**](url)" in front of 24 headings.
+    ['<i class="anchor-icon"></i>', ''],
+    ['<b></b>text', 'text'],
+    [
+      '<a class="anchor" name="x" href="#x"><i class="anchor-icon"></i></a>Title',
+      'Title',
+    ],
+    // Attribute values are not always double-quoted in real HTML.
+    ["<a href='/bots/api'>x</a>", '[x](https://core.telegram.org/bots/api)'],
+    ['<a href=/bots/faq>y</a>', '[y](https://core.telegram.org/bots/faq)'],
+    // Document-relative hrefs must resolve against the page, not pass through:
+    // 23 links such as [Mini Apps](webapps) shipped in the cache pointing at
+    // paths that do not exist once the page is split into per-section files.
+    ['<a href="webapps">Mini Apps</a>', '[Mini Apps](https://core.telegram.org/bots/webapps)'],
+    ['<a href="webapps#design">d</a>', '[d](https://core.telegram.org/bots/webapps#design)'],
+    // Protocol-relative URLs must keep their host instead of being prefixed.
+    ['<a href="//telegram.org/blog">b</a>', '[b](https://telegram.org/blog)'],
+    // Entities outside the hand-maintained table must not leak their source
+    // form into the cache; both sides count "hellip" as text, so no ratio guard
+    // can see this.
+    ['a&hellip;b', 'a…b'],
+    ['x&rsquo;s', 'x’s'],
     ["character ('&#10;', 0x0A)", "character ('\\n', 0x0A)"],
     ['first<br>second', 'first  \nsecond'],
     ['<code>a`b</code>', '``a`b``'],
@@ -624,6 +787,18 @@ if (selfTest) {
     ['<pre><code class="lang-objective-c">@end</code></pre>', '```objective-c\n@end\n```'],
     // A bare lang= is HTML's natural-language attribute, not a code language.
     ['<pre lang="en"><code>hello</code></pre>', '```\nhello\n```'],
+    // A table row carrying a class must not disappear. Losing one row leaves a
+    // structurally valid table that has silently shifted: in the real currency
+    // table the header vanished and the first data row took its place.
+    [
+      '<table><tr class="new"><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>',
+      '| A | B |\n| --- | --- |\n| 1 | 2 |',
+    ],
+    // HTML lets </tr> be omitted; the next <tr> closes the row implicitly.
+    [
+      '<table><tr><th>A</th><tr><td>1</td></table>',
+      '| A |\n| --- |\n| 1 |',
+    ],
     // A label that could break the fence line is dropped, not written through.
     ['<pre><code class="lang-a`b">x</code></pre>', '```\nx\n```'],
     // A nested list must not truncate its parent at the inner </ul>: this ate
@@ -773,7 +948,15 @@ function contentRegion(html) {
   // first tag, which the converter would faithfully carry into the output.
   const openEnd = html.indexOf('>', start);
   if (openEnd === -1) throw new Error('page layout changed: unterminated dev_page_content tag');
-  return html.slice(openEnd + 1, end === -1 ? undefined : end);
+  // A missing footer marker used to mean "take everything to the end of the
+  // document", so renaming that class would silently append the site footer and
+  // navigation to the last section. Every guard would accept it, because the
+  // extra material is converted faithfully and accounted for. Refusing instead
+  // costs one STALE run and cannot corrupt the cache.
+  if (end === -1 || end < openEnd) {
+    throw new Error('page layout changed: no footer_wrap after the content region');
+  }
+  return html.slice(openEnd + 1, end);
 }
 
 function classifySection(anchor, title, level, parentAnchor, prose) {
@@ -807,6 +990,7 @@ function splitSections(region, baseUrl, prose = false) {
   const headingRe =
     /<h([34])(?:\s[^>]*)?><a\b(?=[^>]*\bclass="anchor")(?=[^>]*\bname="([^"]+)")[^>]*>(?:<i[^>]*><\/i>)?<\/a>(.*?)<\/h\1>/gs;
   const marks = [];
+  const seenAnchors = new Set();
   let m;
   while ((m = headingRe.exec(region)) !== null) {
     const anchor = m[2];
@@ -817,10 +1001,21 @@ function splitSections(region, baseUrl, prose = false) {
     if (!/^[\w.-]+$/.test(anchor) || anchor.includes('..') || anchor.startsWith('.')) {
       throw new Error(`unsafe anchor name "${anchor}"`);
     }
+    // Anchors become filenames, so two sections sharing one would leave the
+    // second silently overwriting the first while meta.json and the index still
+    // advertise both. Compared case-insensitively because the cache is written
+    // to disks that do not distinguish case.
+    const key = anchor.toLowerCase();
+    if (seenAnchors.has(key)) {
+      throw new Error(`duplicate anchor "${anchor}" — two sections would share one file`);
+    }
+    seenAnchors.add(key);
     marks.push({
       level: Number(m[1]),
       anchor,
-      title: inlineToMd(m[3], baseUrl).trim(),
+      // Collapsed to one line: the title is interpolated into index.md, which
+      // is one section per line, so an embedded newline would forge an entry.
+      title: inlineToMd(m[3], baseUrl).replace(/\s+/g, ' ').trim(),
       start: m.index,
       bodyStart: m.index + m[0].length,
       headLen: m[0].length,
@@ -898,6 +1093,17 @@ function splitSections(region, baseUrl, prose = false) {
     ]) {
       if (got < expected) structural.push({ anchor: mark.anchor, kind, expected, got });
     }
+    // Table rows are counted exactly, not as a ratio: across 573 sections with
+    // tables the markdown line count equals <tr> plus one separator line per
+    // table, with zero exceptions. Counting only whole tables let a dropped row
+    // through — losing the header row of the 95-currency table promoted the
+    // first data row into its place, leaving a table that still parses, still
+    // passes every text-volume check, and is no longer true.
+    const expectedRows = n(bodyHtml, /<tr\b/gi) + n(bodyHtml, /<table\b/gi);
+    const gotRows = n(md, /^[ \t]*\|/gm);
+    if (expectedRows > 0 && gotRows !== expectedRows) {
+      structural.push({ anchor: mark.anchor, kind: 'table row', expected: expectedRows, got: gotRows });
+    }
     const firstPara = md.split('\n\n').find((b) => b && !b.startsWith('|') && !b.startsWith('```'));
     const summary = (firstPara ?? '').replace(/\n/g, ' ').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
     sections.push({
@@ -939,6 +1145,42 @@ function splitSections(region, baseUrl, prose = false) {
         `the converter may not handle the current markup: ${worst}`,
     );
   }
+  const bloated = fidelity.filter((f) => f.ratio > FIDELITY_MAX_RATIO);
+  if (bloated.length > 0) {
+    const worst = [...bloated]
+      .sort((a, b) => b.ratio - a.ratio)
+      .slice(0, 5)
+      .map((f) => `${f.anchor} (${Math.round(f.ratio * 100)}%)`)
+      .join(', ');
+    throw new Error(
+      `body text duplicated in ${bloated.length} of ${fidelity.length} measurable sections: ${worst}`,
+    );
+  }
+  // Whole categories of inline markup disappear at once when a tag pattern
+  // stops matching, and nothing above can see it: link targets are excluded
+  // from the text comparison by design, and emphasis and backticks are
+  // punctuation that no character count weighs.
+  const nAll = (s, re) => (s.match(re) ?? []).length;
+  const mdAll = sections.map((s) => s.md).join('\n');
+  const htmlLinks = nAll(region, /<a\b[^>]*\bhref\s*=/gi);
+  const mdLinks = nAll(mdAll, /\]\(/g);
+  if (htmlLinks >= INLINE_GUARD_MIN_COUNT && mdLinks / htmlLinks < LINK_MIN_RATIO) {
+    throw new Error(
+      `only ${mdLinks} of ${htmlLinks} links survived conversion — ` +
+        'the converter may no longer recognise this page\'s link markup',
+    );
+  }
+  // <code> inside <pre> becomes a fence, not a span, so it is excluded here;
+  // with that exclusion the two counts match almost exactly in practice.
+  const htmlSpans =
+    nAll(region, /<code\b/gi) - nAll(region, /<pre\b[^>]*>\s*<code\b/gi);
+  const mdSpans = countCodeSpans(mdAll);
+  if (htmlSpans >= INLINE_GUARD_MIN_COUNT && mdSpans / htmlSpans < CODE_MIN_RATIO) {
+    throw new Error(
+      `only ${mdSpans} of ${htmlSpans} inline code spans survived conversion — ` +
+        'the converter may no longer recognise this page\'s <code> markup',
+    );
+  }
   // Conservation of mass. Both guards above weigh section bodies against section
   // bodies, so neither can see text that ended up in no section at all — which
   // is precisely how the dropped page intros survived two full audits. This
@@ -953,6 +1195,12 @@ function splitSections(region, baseUrl, prose = false) {
     throw new Error(
       `${pageMass - keptMass} of ${pageMass} characters on the page reached no section ` +
         `(${Math.round((keptMass / pageMass) * 100)}% kept) — the splitter is discarding content`,
+    );
+  }
+  if (pageMass > 0 && keptMass / pageMass > MASS_MAX_RATIO) {
+    throw new Error(
+      `output holds ${Math.round((keptMass / pageMass) * 100)}% of the page's text — ` +
+        'the converter is duplicating content',
     );
   }
   return sections;
@@ -1063,13 +1311,35 @@ let exitCode = 0;
 let fatal = false;
 let lockAcquired = false;
 
+// Written into the lock directory so a run can prove the lock it deletes is
+// still its own. Worst-case runtime (ten sources x a 30 s fetch timeout) equals
+// LOCK_STALE_MS exactly, so a slow-but-healthy run can have its lock taken over;
+// without this check it would then delete the new owner's lock on the way out
+// and leave two runs writing the same cache.
+const LOCK_TOKEN = `${process.pid}-${CONVERTER_HASH}`;
+const LOCK_ID_PATH = join(LOCK_DIR, 'owner');
+
+// The reason a lock could not be taken. Reporting "another refresh is already
+// running" for a permission error sent read-only installations into permanent,
+// misdiagnosed staleness with no way to tell the two cases apart.
+let lockFailure = 'another refresh is already running';
+
 function acquireLock() {
   if (lockAcquired) return true;
-  try {
+  const claim = () => {
     mkdirSync(LOCK_DIR);
+    writeFileSync(LOCK_ID_PATH, LOCK_TOKEN);
     lockAcquired = true;
     return true;
-  } catch {
+  };
+  try {
+    return claim();
+  } catch (err) {
+    if (err.code && err.code !== 'EEXIST') {
+      lockFailure = `cache directory is not writable (${err.code})`;
+      return false;
+    }
+    lockFailure = 'another refresh is already running';
     try {
       if (Date.now() - statSync(LOCK_DIR).mtimeMs > LOCK_STALE_MS) {
         // Atomic takeover of a crashed run's lock: rename succeeds for exactly
@@ -1077,9 +1347,7 @@ function acquireLock() {
         const trash = `${LOCK_DIR}.stale-${process.pid}`;
         renameSync(LOCK_DIR, trash);
         rmSync(trash, { recursive: true, force: true });
-        mkdirSync(LOCK_DIR);
-        lockAcquired = true;
-        return true;
+        return claim();
       }
     } catch {
       // Lock vanished, another contender won the takeover, or someone re-made
@@ -1090,11 +1358,44 @@ function acquireLock() {
 }
 
 function releaseLock() {
-  if (lockAcquired) {
-    rmSync(LOCK_DIR, { recursive: true, force: true });
-    lockAcquired = false;
+  if (!lockAcquired) return;
+  lockAcquired = false;
+  try {
+    // Only remove a lock we still own. If a takeover happened while this run was
+    // working, the directory now belongs to someone else and must be left alone.
+    if (readFileSync(LOCK_ID_PATH, 'utf8') !== LOCK_TOKEN) return;
+  } catch {
+    return; // no owner file: not ours to delete
+  }
+  rmSync(LOCK_DIR, { recursive: true, force: true });
+}
+
+// The lock outlives the process unless release is unconditional. Piping this
+// script into `head`, or interrupting it, used to leave the directory behind,
+// after which every invocation for the next five minutes reported STALE and the
+// agent dutifully told users the cache could not be verified — a false
+// disclosure, since it had been verified seconds earlier.
+let released = false;
+function releaseOnce() {
+  if (released) return;
+  released = true;
+  try {
+    releaseLock();
+  } catch {
+    // Never let cleanup mask the original failure.
   }
 }
+process.on('exit', releaseOnce);
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(signal, () => {
+    releaseOnce();
+    process.exit(130);
+  });
+}
+// A closed stdout (`| head`) otherwise raises EPIPE as an unhandled error and
+// kills the run mid-refresh.
+process.stdout.on('error', () => {});
+process.stderr.on('error', () => {});
 
 /** Persist meta/index if anything changed. Called per-source AND at the end. */
 function persist() {
@@ -1143,7 +1444,7 @@ for (const source of SOURCES) {
   }
 
   if (!acquireLock()) {
-    sourceProblem(source, entry, hasCache, 'another refresh is already running');
+    sourceProblem(source, entry, hasCache, lockFailure);
     continue;
   }
 
@@ -1226,5 +1527,5 @@ for (const source of SOURCES) {
 }
 
 persist();
-releaseLock();
+releaseOnce();
 process.exit(fatal ? 1 : exitCode);
