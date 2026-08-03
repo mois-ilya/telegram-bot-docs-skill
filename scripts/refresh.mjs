@@ -365,6 +365,41 @@ const BLOCK_START = /<(?:table|div|ul|ol|blockquote|pre|h[1-6])\b/i;
 // Block children of a list item that lose meaning if flattened to inline text.
 const BLOCK_IN_ITEM = /<(?:ul|ol|pre|table|blockquote)\b/i;
 
+/**
+ * Language label for a code fence, read from the markup and never guessed.
+ *
+ * Telegram currently tags 4 of the 53 code blocks it publishes, as
+ * `<code class="lang-json">` on the Mini Apps OAuth examples. That is source
+ * metadata and discarding it is the same class of fidelity loss as dropping
+ * text, so it is carried onto the fence. The other 49 get no hint: there is no
+ * signal in the markup, and content-sniffing is unsafe here — most of them are
+ * not code at all but MarkdownV2 syntax samples and bare URLs set in a monospace
+ * font, and the block that looks most like JSON is an openssl INI config. A
+ * wrong language would be indistinguishable from documented fact.
+ *
+ * The label is read from either the <pre> or the <code> tag, under any of the
+ * conventions in common use, and from any position in a multi-class list, so a
+ * value Telegram does not currently emit still comes through if it appears.
+ * Anything outside the allowlist is dropped rather than written: the label lands
+ * on the fence line, where a stray backtick or newline would break the block.
+ */
+function codeFenceLang(preTag, inner) {
+  const codeTag = inner.match(/<code\b[^>]*>/i)?.[0] ?? '';
+  for (const tag of [codeTag, preTag]) {
+    const found =
+      tag.match(/\bclass="[^"]*?\b(?:lang|language|highlight|brush)-([^\s"]+)/i)?.[1] ??
+      tag.match(/\bdata-lang(?:uage)?="([^"]+)"/i)?.[1];
+    // Deliberately not a bare `lang=`: in HTML that attribute carries the
+    // natural language of the content, so <pre lang="en"> would produce an
+    // ```en fence.
+    if (found === undefined) continue;
+    const lang = decodeEntities(found).trim().toLowerCase();
+    // Real language names: c++, c#, objective-c, f#, asp.net, shell-session.
+    if (/^[a-z0-9][a-z0-9+#._-]{0,19}$/.test(lang)) return lang;
+  }
+  return '';
+}
+
 /** Split a list body into top-level <li> bodies, skipping nested lists. */
 function splitListItems(html) {
   const items = [];
@@ -473,6 +508,7 @@ function blockToMd(html, baseUrl) {
         );
         break;
       case 'pre': {
+        const lang = codeFenceLang(m[0], inner);
         const code = inner
           .replace(/<img[^>]*alt="([^"]*)"[^>]*>/g, '$1')
           .replace(/<\/?code[^>]*>/g, '');
@@ -481,7 +517,7 @@ function blockToMd(html, baseUrl) {
         // always be longer than any backtick run in the content.
         const longestRun = Math.max(0, ...[...text.matchAll(/`+/g)].map((r) => r[0].length));
         const fence = '`'.repeat(Math.max(3, longestRun + 1));
-        out.push(`${fence}\n${text}\n${fence}`);
+        out.push(`${fence}${lang}\n${text}\n${fence}`);
         break;
       }
       case 'h5':
@@ -573,6 +609,23 @@ if (selfTest) {
     // The fence must outgrow any backtick run in the content — the docs' own
     // Markdown examples contain literal ``` lines inside <pre>.
     ['<pre><code>a\n```\nb</code></pre>', '````\na\n```\nb\n````'],
+    // A language the docs declare is carried onto the fence...
+    ['<pre><code class="lang-json">{"a": 1}</code></pre>', '```json\n{"a": 1}\n```'],
+    // ...and an undeclared one is left blank rather than guessed. This block is
+    // an openssl INI config on the webhooks page; content-sniffing calls it JSON.
+    ['<pre><code>[NewRequest]\nSubject = "CN=x"</code></pre>', '```\n[NewRequest]\nSubject = "CN=x"\n```'],
+    // Conventions Telegram does not use today must still come through if it
+    // starts: label on the <pre>, other class prefixes, data attributes, a
+    // multi-class list, and punctuation that is part of real language names.
+    ['<pre class="lang-bash"><code>ls</code></pre>', '```bash\nls\n```'],
+    ['<pre><code class="hljs language-python">x = 1</code></pre>', '```python\nx = 1\n```'],
+    ['<pre><code class="prettyprint highlight-c++">int x;</code></pre>', '```c++\nint x;\n```'],
+    ['<pre data-language="Go"><code>package main</code></pre>', '```go\npackage main\n```'],
+    ['<pre><code class="lang-objective-c">@end</code></pre>', '```objective-c\n@end\n```'],
+    // A bare lang= is HTML's natural-language attribute, not a code language.
+    ['<pre lang="en"><code>hello</code></pre>', '```\nhello\n```'],
+    // A label that could break the fence line is dropped, not written through.
+    ['<pre><code class="lang-a`b">x</code></pre>', '```\nx\n```'],
     // A nested list must not truncate its parent at the inner </ul>: this ate
     // four top-level entries of the Bot Features navigation list in practice.
     [
@@ -637,9 +690,12 @@ if (selfTest) {
 // pages between them carry the structures that broke it: a 95-row table, shell
 // snippets nested inside list items, videos, content images and emoji sprites.
 // Frozen input means the recorded output changes only when the converter does.
+// webapps is the one reference page here, and the only fixture that exercises
+// prose:false — method/type classification — and the language-tagged fences.
 const GOLDEN_FIXTURES = [
   { file: 'webhooks.html', url: 'https://core.telegram.org/bots/webhooks', prose: true },
   { file: 'payments.html', url: 'https://core.telegram.org/bots/payments', prose: true },
+  { file: 'webapps.html', url: 'https://core.telegram.org/bots/webapps', prose: false },
 ];
 
 function renderGolden(sections) {
