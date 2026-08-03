@@ -68,6 +68,25 @@ test('existing generated cache is internally consistent when present', () => {
   assert.ok(checked.length > 0, 'meta.json present but no source could be verified');
 });
 
+test('every cache path cited by reference/basics.md exists', () => {
+  const basicsPath = join(ROOT, 'reference', 'basics.md');
+  if (!existsSync(basicsPath) || !existsSync(join(ROOT, 'cache', 'meta.json'))) return;
+
+  // basics.md is hand-maintained and not freshness-checked, so it rots silently
+  // when upstream renames an anchor. Routing a reader to a file that no longer
+  // exists is worse than not routing at all — fail loudly instead.
+  const cited = new Set(
+    [...readFileSync(basicsPath, 'utf8').matchAll(/`([a-z0-9-]+\/[a-z0-9._-]+\.md)`/g)].map((m) => m[1]),
+  );
+  assert.ok(cited.size > 10, 'basics.md cites suspiciously few cache paths');
+  // Section paths are written relative to cache/; a path that already names
+  // cache/ (such as the index itself) is relative to the skill root.
+  const missing = [...cited].filter(
+    (p) => !existsSync(p.startsWith('cache/') ? join(ROOT, p) : join(ROOT, 'cache', p)),
+  );
+  assert.deepEqual(missing, [], `basics.md points at non-existent cache files: ${missing.join(', ')}`);
+});
+
 test('every configured source is represented in the generated cache', () => {
   const metaPath = join(ROOT, 'cache', 'meta.json');
   if (!existsSync(metaPath)) return;

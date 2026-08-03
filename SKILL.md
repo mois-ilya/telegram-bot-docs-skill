@@ -1,22 +1,38 @@
 ---
 name: telegram-docs
 description: >-
-  Provides freshness-checked official Telegram Bot API and Mini Apps
-  documentation as small searchable Markdown sections. Use for Telegram
-  platform behavior, Bot API methods and types, updates and webhooks, message
-  formatting, inline mode, keyboards, payments and Stars, Mini App initData
-  validation, theme parameters, WebApp events, or documentation cache updates.
+  Provides freshness-checked official Telegram bot documentation as small
+  searchable Markdown sections. Use for Telegram platform behavior, Bot API
+  methods and types, updates and webhooks, message formatting, inline mode,
+  keyboards and menu buttons, BotFather setup, commands, deep linking, privacy
+  mode, business and managed bots, payments and Telegram Stars, subscriptions,
+  paid media, games, rate limits and broadcasting, webhook or certificate
+  troubleshooting, Bot API version history, Mini App initData validation, theme
+  parameters, WebApp events, or documentation cache updates.
 ---
 
 # Telegram Docs
 
-Use a local, freshness-checked cache of the two official Telegram documentation pages:
-
-- **Bot API** — https://core.telegram.org/bots/api → `cache/bot-api/` (~570 sections)
-- **Mini Apps** — https://core.telegram.org/bots/webapps → `cache/webapps/` (~100 sections)
-
+Use a local, freshness-checked cache of the official Telegram bot documentation.
 Each method, type, and prose section is a separate small markdown file. Never load
 the original HTML pages into context — that is exactly what this skill exists to avoid.
+
+| Source | Page | Cache dir | Sections |
+|---|---|---|---|
+| Bot API | `/bots/api` | `cache/bot-api/` | ~600 |
+| Mini Apps | `/bots/webapps` | `cache/webapps/` | ~105 |
+| Bot Features | `/bots/features` | `cache/features/` | ~70 |
+| API Changelog | `/bots/api-changelog` | `cache/changelog/` | ~95 |
+| Webhooks Guide | `/bots/webhooks` | `cache/webhooks/` | ~15 |
+| Payments | `/bots/payments` | `cache/payments/` | ~27 |
+| Payments via Stars | `/bots/payments-stars` | `cache/payments-stars/` | ~23 |
+| Inline Mode | `/bots/inline` | `cache/inline/` | ~6 |
+| Games | `/bots/games` | `cache/games/` | ~8 |
+| Bot FAQ | `/bots/faq` | `cache/faq/` | ~20 |
+
+All pages live under `https://core.telegram.org`. Not cached: the `/bots` landing
+page (marketing), `/bots/tutorial` and `/bots/samples` (library-specific — see
+"What this skill is not"), and the MTProto client API at `/api`.
 
 ## Workflow
 
@@ -48,22 +64,50 @@ docs actually changed. Interpret the one-line-per-source output:
 When the user explicitly asks to refresh/update the Telegram docs (any phrasing), run
 with `--force` and report what changed.
 
-**Step 2 — locate the section.** Search `<SKILL_ROOT>/cache/index.md` with an
+**Step 2 — orient, if the target is not already obvious.** When the question is
+conceptual ("how does X work on Telegram?"), or when you would not know what the
+feature is officially called, read `<SKILL_ROOT>/reference/basics.md` first. It maps
+how users describe a symptom onto the official term and the exact cached file — a
+complaint like "my bot doesn't see group messages" is documented under "privacy mode",
+which you cannot grep for without knowing the term. Skip this step when the question
+already names a method or type.
+
+`basics.md` is hand-maintained and **not** freshness-checked; it carries no
+version-dependent facts. Answer from the cached section it points to, never from
+`basics.md` itself.
+
+**Step 3 — locate the section.** Search `<SKILL_ROOT>/cache/index.md` with an
 available text-search tool such as `rg` or `grep`. It contains one line per section:
-`**name** — kind — summary → path`. Methods are camelCase (`sendmessage.md`), types
-are PascalCase in the index (`InlineKeyboardButton` → `inlinekeyboardbutton.md`),
-files are named by the official page anchor. Useful non-obvious anchors:
+`**name** — kind — summary → path`, grouped under a `## Source` heading per page.
+Methods are camelCase (`sendmessage.md`), types are PascalCase in the index
+(`InlineKeyboardButton` → `inlinekeyboardbutton.md`), files are named by the official
+page anchor.
+
+With ~970 sections, a broad term can match many lines. Narrow by `kind`:
+`method` and `type` exist only in `bot-api/` and `webapps/` and give the API surface;
+`section` is the prose guides; `changelog` is dated history. Searching
+`grep ' — method — ' cache/index.md | grep -i invoice` beats an unfiltered grep.
+
+Useful non-obvious anchors:
 
 - Formatting / MarkdownV2 / HTML escaping → `bot-api/formatting-options.md`
 - Webhook semantics and update delivery → `bot-api/getting-updates.md`, `bot-api/setwebhook.md`
+- Webhook/TLS troubleshooting → `faq/im-having-problems-with-webhooks.md`, then `webhooks/`
+- Rate limits and broadcasting → `faq/my-bot-is-hitting-limits-how-do-i-avoid-this.md`
+- BotFather, commands, deep linking, privacy mode → `features/`
 - Mini App initData validation → `webapps/validating-data-received-via-the-mini-app.md`, `webapps/webappinitdata.md`
-- What changed recently → `bot-api/recent-changes.md` and date-anchored changelog files (kind: changelog)
+- "Since which Bot API version?" → `changelog/` (dated entries back to 2015);
+  `bot-api/recent-changes.md` holds only the newest few
 
-**Step 3 — read only what you need.** Resolve paths from the index relative to
+**Step 4 — read only what you need.** Resolve paths from the index relative to
 `<SKILL_ROOT>/cache/` and read only the matched section files. They are typically
 1–10 KB each. Related types are linked; follow only the links the question requires.
+One exception: `webhooks/the-verbose-version.md` is ~32 KB because the official page
+keeps that walkthrough under a single anchor. Prefer its sibling sections
+(`webhooks/supported-certificates.md`, `webhooks/an-untrusted-root.md`,
+`webhooks/intermediate-certificates.md`) and open the verbose file only for a deep dig.
 
-**Step 4 — answer with provenance.** Cite the official anchor URL from the file
+**Step 5 — answer with provenance.** Cite the official anchor URL from the file
 header (e.g. `https://core.telegram.org/bots/api#sendmessage`). If Step 1 reported
 STALE, say so explicitly.
 
