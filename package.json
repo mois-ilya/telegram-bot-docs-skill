@@ -1,0 +1,14 @@
+{
+  "name": "telegram-docs-agent-skill",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Portable Agent Skill for freshness-checked Telegram documentation",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "check": "node --check scripts/refresh.mjs",
+    "test": "node --test"
+  }
+}
