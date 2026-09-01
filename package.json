@@ -1,6 +1,6 @@
 {
   "name": "telegram-bot-docs-skill",
-  "version": "0.1.0-beta.1",
+  "version": "0.1.0-beta.2",
   "private": true,
   "description": "Agent Skill for freshness-checked Telegram Bot Platform documentation",
   "type": "module",

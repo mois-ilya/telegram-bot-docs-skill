@@ -7,6 +7,10 @@ Use it when an agent needs to verify platform behavior, find an exact method or
 type, troubleshoot webhooks and payments, validate Mini App data, or answer a
 Telegram bot question with a link to the official source.
 
+The core skill is host-neutral and is verified with both Codex and Claude Code.
+`agents/openai.yaml` only adds optional Codex UI metadata; Claude Code does not
+need it to discover or run the skill.
+
 > Status: beta. The core cache and conversion workflow is tested; installation
 > and compatibility feedback is welcome.
 
@@ -52,25 +56,46 @@ This is `$CODEX_HOME/skills/telegram-bot-docs/` when `CODEX_HOME` is set. Codex
 discovers the `SKILL.md` automatically. If it does not appear immediately, restart
 Codex. You can also ask `$skill-installer` to install this repository.
 
+### Claude Code
+
+Clone the same repository to the Claude Code user skills directory:
+
+```bash
+git clone https://github.com/mois-ilya/telegram-bot-docs-skill.git ~/.claude/skills/telegram-bot-docs
+```
+
+Claude Code discovers `~/.claude/skills/telegram-bot-docs/SKILL.md`
+automatically. Start a new session after installation and invoke the skill as
+`/telegram-bot-docs`. Keep the destination directory name exactly
+`telegram-bot-docs`; Claude Code uses it when exposing the slash command.
+
 ### Other Agent Skills hosts
 
 Place the repository in the host's user or project skills directory. The host must
-be able to run Node.js scripts and allow access to `core.telegram.org`.
+be able to run Node.js scripts and allow access to `core.telegram.org`. Preserve
+the `telegram-bot-docs` directory name on hosts that derive the skill identifier
+from the directory.
 
 ## Use
 
-Invoke the skill explicitly:
+Invoke the skill explicitly using the syntax of your host.
+
+Codex:
 
 ```text
 Use $telegram-bot-docs to verify how MarkdownV2 escaping works.
 ```
 
-```text
-Use $telegram-bot-docs to explain why my bot does not receive every group message.
-```
+Claude Code:
 
 ```text
-Use $telegram-bot-docs to check how Mini App initData should be validated.
+/telegram-bot-docs Explain why my bot does not receive every group message.
+```
+
+Either host can handle the same request:
+
+```text
+Check how Mini App initData should be validated against the official documentation.
 ```
 
 The skill can also activate automatically when a request matches its description.
@@ -160,7 +185,7 @@ Telegram documentation.
 
 ```text
 SKILL.md              agent-facing workflow
-agents/openai.yaml    optional Codex UI metadata
+agents/openai.yaml    optional Codex UI metadata; not required by Claude Code
 reference/basics.md   symptom-to-documentation routing
 scripts/refresh.mjs   cache refresher and HTML-to-Markdown converter
 cache/                generated local documentation cache

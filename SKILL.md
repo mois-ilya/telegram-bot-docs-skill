@@ -95,7 +95,7 @@ relate, and on `faq/` a full table of contents. Read one when a question is abou
 whole area rather than a named method (`webhooks/_intro.md` covers getUpdates versus
 setWebhook; `payments/_intro.md` covers physical versus digital goods).
 
-With ~980 sections, a broad term can match many lines. Narrow by `kind`:
+With roughly 1,000 sections, a broad term can match many lines. Narrow by `kind`:
 `method` and `type` exist only in `bot-api/` and `webapps/` and give the API surface;
 `section` is the prose guides; `changelog` is dated history. Searching
 `grep ' — method — ' cache/index.md | grep -i invoice` beats an unfiltered grep.
