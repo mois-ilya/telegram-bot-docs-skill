@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * telegram-docs cache refresher.
+ * telegram-bot-docs cache refresher.
  *
  * Downloads the official Telegram Bot API and Mini Apps documentation pages,
  * verifies freshness against the local cache (sha256 of the documentation

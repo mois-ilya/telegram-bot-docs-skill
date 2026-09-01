@@ -1,5 +1,5 @@
 ---
-name: telegram-docs
+name: telegram-bot-docs
 description: >-
   Provides freshness-checked official Telegram bot documentation as small
   searchable Markdown sections. Use for Telegram platform behavior, Bot API
@@ -11,7 +11,7 @@ description: >-
   parameters, WebApp events, or documentation cache updates.
 ---
 
-# Telegram Docs
+# Telegram Bot Docs
 
 Use a local, freshness-checked cache of the official Telegram bot documentation.
 Each method, type, and prose section is a separate small markdown file. Never load

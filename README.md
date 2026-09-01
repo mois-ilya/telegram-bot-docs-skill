@@ -1,148 +1,167 @@
-# telegram-docs
+# telegram-bot-docs-skill
 
-Portable Agent Skill providing freshness-checked official Telegram bot documentation
-as small per-section Markdown files instead of large HTML pages. Covers the Bot API
-and Mini Apps references plus the guide pages under `core.telegram.org/bots`:
-features, changelog, webhooks, payments, Stars, inline mode, games and the FAQ —
-~980 sections across ten sources.
+An Agent Skill that gives coding agents current, searchable Telegram Bot API and
+Mini Apps documentation without loading the full reference into context.
 
-The skill follows the portable `SKILL.md` Agent Skills layout and contains no
-client-specific workflow instructions. It can be used by skills-compatible agents
-that can run Node.js scripts and access `core.telegram.org`, including Claude Code
-and Codex.
+Use it when an agent needs to verify platform behavior, find an exact method or
+type, troubleshoot webhooks and payments, validate Mini App data, or answer a
+Telegram bot question with a link to the official source.
 
-## Why
+> Status: beta. The core cache and conversion workflow is tested; installation
+> and compatibility feedback is welcome.
 
-Telegram publishes its bot documentation as large human-oriented HTML pages. Loading
-them into an agent's context is expensive, while answering from model memory is often
-stale. This skill builds a local searchable Markdown cache and checks it against the
-official pages within a configurable TTL window (24 hours by default; use
-`--max-age 0` for a live check).
+## What you get
 
-Reference material alone is not enough: much of what breaks a bot in practice — privacy
-mode, rate limits, deep linking, webhook certificates — lives in the guide pages, not
-in the method reference. Those are cached too, and `reference/basics.md` maps how users
-describe a symptom onto the official term needed to find it.
+- Official Bot API, Mini Apps, Bot Features, changelog, FAQ, webhooks, payments,
+  Stars, inline mode, and games documentation.
+- Roughly 1,000 small Markdown sections instead of a handful of very large HTML
+  pages.
+- A searchable index that separates methods, types, guides, and changelog entries.
+- Freshness checks with a 24-hour default TTL and an explicit live-check mode.
+- Source links in every cached section so answers can cite the original page.
+- Safe fallback to the last usable cache when a live refresh fails.
 
-## Freshness model
+The skill covers the Telegram platform itself. It does not replace documentation
+for libraries such as grammY, Telegraf, or `@telegram-apps/sdk`.
 
-`scripts/refresh.mjs`:
+## Requirements
 
-1. Skips the network within the TTL.
-2. Otherwise downloads each official page and compares a SHA-256 hash of its
-   documentation content region. Sources are independent: one page failing to verify
-   never blocks the others.
-3. Rebuilds per-section Markdown and `cache/index.md` only when needed.
-4. Reports `STALE` with exit code 2 when an existing cache cannot be checked, and
-   `FATAL` with exit code 1 when no usable cache exists.
+- Node.js 20 or newer
+- Network access to `https://core.telegram.org`
+- A writable skill directory for the generated cache
 
-Freshness tracks the converter as well as the page. Each entry in `cache/meta.json`
-records a hash of `scripts/refresh.mjs`, so editing the converter invalidates every
-cached page automatically on the next run — a cache built by an older, buggier build
-can never stay marked `fresh`, and applying a fix never depends on someone remembering
-to pass `--force`.
+There are no runtime npm dependencies.
 
-## Conversion
+## Install
 
-HTML is tokenized and built into a tree before anything is converted. The earlier
-implementation scanned with regular expressions, and every round of review found the
-same shape of defect: a pattern matched the markup someone remembered and missed the
-rest — `<tr>` but not `<tr class="new">`, `<br>` but not `<BR>`, `href` but also
-`data-href`, `<ul>` but not `<dl>`. Patching each case only moved the boundary. A
-tokenizer implements the grammar instead of a list of remembered cases, so attribute
-quoting, tag-name case, unknown elements, nesting and omitted end tags are handled by
-construction rather than by another pattern.
+### Codex
 
-What it does not know, it refuses: an element that HTML defines as block-level but the
-renderer has no rule for aborts the refresh instead of being flattened into the
-surrounding prose. A `<dl>` glossary quietly rendered as `fieldDescription here.next`
-would pass every text measurement, because no character is missing.
-
-Guards decide whether a rebuild may be published, and each catches what the previous
-ones cannot. All of them have been observed firing on a deliberately reintroduced
-defect — a guard never seen red is not a guard:
-
-1. **Headings** — refuses when the number of parsed sections does not match the number
-   of headings on the page. Proves every section was *found*.
-2. **Body fidelity** — compares the visible text of each section's HTML against the
-   Markdown produced from it, refusing when a section lost more than 15%. Proves each
-   section was carried over *whole*.
-3. **Structure** — compares what the parsed page contains against what the renderer
-   emitted: tables, rows, code fences, links, images and code spans, counted at the
-   point of emission. Text volume cannot see a table flattened into a paragraph:
-   every character survives while the rows and columns are destroyed, and losing one
-   row once deleted a 95-row table's header and promoted the first data row into its
-   place — still valid Markdown, no longer true. Counting at emission rather than by
-   reading the finished Markdown back also removes a whole class of false alarm: a
-   pipe-leading line inside a code fence is not a table row, and a table indented by
-   a blockquote is still a table.
-4. **Growth** — refuses a build that returns materially fewer sections than the last
-   one. The documentation only grows, so a shrinking build is the strongest available
-   signal that something stopped being recognised, and it is the only guard that does
-   not depend on knowing today's markup. An absolute floor cannot substitute: when
-   the Mini Apps page had its sub-headings demoted one level, 107 sections became 15
-   and cleared a floor of 10. Rerun with `--force` to accept a genuine shrink.
-5. **Conservation of mass** — weighs the whole page against everything written out,
-   byte-exactly for splitter coverage and by ratio for converted text. Guards 2 and 3
-   compare section bodies against section bodies, so neither can see content that
-   ended up in *no* section — which is how the intro of every page went missing
-   undetected through two full audits. This is the only guard that closes that gap.
-
-Without them a converter that silently drops or flattens content still reports
-`fresh`, which is the only way this cache could mislead with no visible symptom.
-Every threshold is set from measurements across all ten live pages, and the measured
-margins are recorded beside each constant in the source.
-
-Text preceding a page's first anchored heading is published as a synthetic
-`_intro.md` section and passes through the same guards. It is real content: the
-webhooks guide opens with 1088 characters comparing `getUpdates` and `setWebhook`.
-
-`--golden` converts whole saved pages from `tests/fixtures/` offline and diffs the
-result against recorded output, so converter changes are reviewed as a diff over real
-markup rather than over fragments someone thought to write down. Re-record with
-`--update-golden` after an intended change.
-
-## Distribution model
-
-The generated cache is **not** redistributed. Its contents are ignored by Git; each
-installation downloads and builds its own private copy from the official Telegram
-documentation pages, and only `cache/.gitkeep` ships so the directory exists
-immediately after installation.
-
-Three files under `tests/fixtures/` are the exception: they are verbatim copies of
-three official pages, checked in together with their converted output so the golden
-test can run offline and deterministically. They are test data, not the cache, and
-are never read at runtime. Everything else in this repository — the skill
-instructions, scripts and tests — is the project's own work and is what the LICENSE
-covers; the fixture pages and their conversions remain Telegram's content.
-
-## Layout
+Copy or clone the repository to your user skills directory:
 
 ```text
-SKILL.md            portable agent-facing workflow
-reference/basics.md hand-maintained symptom-to-section routing (not freshness-checked)
-scripts/refresh.mjs dependency-free Node.js refresher and converter
-cache/.gitkeep      preserves the generated-cache directory in Git
-cache/*             generated locally and not distributed
-tests/              offline regression and CLI tests
-tests/fixtures/     saved real pages plus their recorded conversion (golden tests)
+~/.codex/skills/telegram-bot-docs/
 ```
 
-## Requirements and usage
+This is `$CODEX_HOME/skills/telegram-bot-docs/` when `CODEX_HOME` is set. Codex
+discovers the `SKILL.md` automatically. If it does not appear immediately, restart
+Codex. You can also ask `$skill-installer` to install this repository.
 
-Requires Node.js 20 or newer. There are no npm runtime dependencies.
+### Other Agent Skills hosts
 
-From any working directory, resolve the installed skill directory and run:
+Place the repository in the host's user or project skills directory. The host must
+be able to run Node.js scripts and allow access to `core.telegram.org`.
+
+## Use
+
+Invoke the skill explicitly:
+
+```text
+Use $telegram-bot-docs to verify how MarkdownV2 escaping works.
+```
+
+```text
+Use $telegram-bot-docs to explain why my bot does not receive every group message.
+```
+
+```text
+Use $telegram-bot-docs to check how Mini App initData should be validated.
+```
+
+The skill can also activate automatically when a request matches its description.
+
+## How it works
+
+On first use, the skill downloads ten official documentation pages, converts them
+into small per-section Markdown files, and builds `cache/index.md`. Later uses skip
+the network while the freshness TTL is valid. When the TTL expires, the script
+checks the live pages and rebuilds only sources that changed.
+
+The generated cache is local and excluded from Git.
+
+Refresh manually:
 
 ```bash
-node <path-to-telegram-docs>/scripts/refresh.mjs
+node scripts/refresh.mjs
 ```
 
-Run `node scripts/refresh.mjs --help` from the repository for all CLI options. Run
-`npm test` for the offline test suite.
+Force a live check:
 
-## License and attribution
+```bash
+node scripts/refresh.mjs --max-age 0
+```
 
-The repository license covers the skill instructions and source code only. Generated
-cache files come from the official Telegram documentation and are not distributed.
-This project is independent and is not affiliated with or endorsed by Telegram.
+Use a different cache location:
+
+```bash
+node scripts/refresh.mjs --cache-dir /path/to/cache
+```
+
+Run `node scripts/refresh.mjs --help` for all options.
+
+## Reliability
+
+A changed page is published only after the converter verifies that it found every
+section and preserved the page's text and important Markdown structure, including
+tables, links, code blocks, code spans, and media. Updates are staged before they
+replace the last usable cache, and each documentation source is refreshed
+independently.
+
+The command reports one status per source:
+
+- `fresh` or `refreshed`: safe to use
+- `STALE`, exit code 2: the previous cache is usable but could not be verified
+- `FATAL`, exit code 1: no usable cache exists for that source
+
+## Development
+
+Run all checks that do not require network access:
+
+```bash
+npm test
+```
+
+Build a fresh cache from the live Telegram documentation and run the live
+regression checks:
+
+```bash
+npm run test:live
+```
+
+Run both suites:
+
+```bash
+npm run test:all
+```
+
+Pack the repository, extract it as a clean installation, and verify that the
+installed copy can build a complete live cache:
+
+```bash
+npm run smoke:install
+```
+
+Validate JavaScript syntax:
+
+```bash
+npm run check
+```
+
+Pushes and pull requests run the offline suite on supported Node.js versions.
+A scheduled workflow runs the live and clean-install checks against the current
+Telegram documentation.
+
+## Project layout
+
+```text
+SKILL.md              agent-facing workflow
+agents/openai.yaml    optional Codex UI metadata
+reference/basics.md   symptom-to-documentation routing
+scripts/refresh.mjs   cache refresher and HTML-to-Markdown converter
+cache/                generated local documentation cache
+tests/                CLI and converter regression tests
+```
+
+## License
+
+The project source is available under the MIT License. This is an independent
+community project and is not affiliated with or endorsed by Telegram.

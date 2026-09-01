@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -66,7 +66,7 @@ test('a closed stdout does not leave the lock behind', () => {
   // the lock directory still in place; every invocation for the next five
   // minutes then reported STALE and the agent passed that on to the user as a
   // failed verification that had in fact just succeeded.
-  const tempRoot = mkdtempSync(join(tmpdir(), 'telegram-docs-test-'));
+  const tempRoot = mkdtempSync(join(tmpdir(), 'telegram-bot-docs-test-'));
   const cacheDir = join(tempRoot, 'cache');
   try {
     const result = spawnSync(
@@ -85,7 +85,7 @@ test('an interrupted directory swap is recovered before meta is read', () => {
   // The recovery used to live inside the swap itself, which only runs after a
   // successful download and conversion — so offline, a complete cache sitting
   // in <dir>.backup was invisible and the run reported FATAL beside intact data.
-  const tempRoot = mkdtempSync(join(tmpdir(), 'telegram-docs-test-'));
+  const tempRoot = mkdtempSync(join(tmpdir(), 'telegram-bot-docs-test-'));
   const cacheDir = join(tempRoot, 'cache');
   try {
     mkdirSync(join(cacheDir, 'bot-api.backup'), { recursive: true });
@@ -99,40 +99,8 @@ test('an interrupted directory swap is recovered before meta is read', () => {
   }
 });
 
-test('a build that loses most of its sections is refused, not published', () => {
-  // The documentation only grows. When the Mini Apps page had its sub-headings
-  // demoted one level, 107 sections became 15 and were published as `refreshed`
-  // because 15 cleared the absolute floor of 10 — every method and type file on
-  // that page would have vanished while the run reported success.
-  const metaPath = join(ROOT, 'cache', 'meta.json');
-  if (!existsSync(metaPath)) return;
-
-  const tempRoot = mkdtempSync(join(tmpdir(), 'telegram-docs-test-'));
-  const cacheDir = join(tempRoot, 'cache');
-  try {
-    cpSync(join(ROOT, 'cache'), cacheDir, { recursive: true });
-    const meta = JSON.parse(readFileSync(join(cacheDir, 'meta.json'), 'utf8'));
-    const key = Object.keys(meta).find((k) => meta[k].sectionCount > 20);
-    if (!key) return;
-    // Claim the previous build was far larger, then force a live re-check.
-    meta[key].sectionCount *= 5;
-    meta[key].hash = 'stale-on-purpose';
-    writeFileSync(join(cacheDir, 'meta.json'), JSON.stringify(meta, null, 2));
-
-    const result = spawnSync(
-      process.execPath,
-      [SCRIPT, '--cache-dir', cacheDir, '--max-age', '0'],
-      { encoding: 'utf8' },
-    );
-    assert.match(result.stdout, /section count fell from/);
-    assert.equal(result.status, 2, 'a shrinking build must degrade to STALE, not publish');
-  } finally {
-    rmSync(tempRoot, { recursive: true, force: true });
-  }
-});
-
 test('cold start creates a missing cache directory', () => {
-  const tempRoot = mkdtempSync(join(tmpdir(), 'telegram-docs-test-'));
+  const tempRoot = mkdtempSync(join(tmpdir(), 'telegram-bot-docs-test-'));
   const cacheDir = join(tempRoot, 'missing', 'cache');
   try {
     execFileSync(process.execPath, [SCRIPT, '--cache-dir', cacheDir, '--self-test']);

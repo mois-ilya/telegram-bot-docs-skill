@@ -1,4 +1,4 @@
 interface:
-  display_name: "Telegram Docs"
+  display_name: "Telegram Bot Docs"
   short_description: "Fresh Telegram Bot API and Mini Apps docs"
-  default_prompt: "Use $telegram-docs to verify this Telegram platform behavior against the official documentation."
+  default_prompt: "Use $telegram-bot-docs to verify this Telegram platform behavior against the official documentation."

@@ -25,7 +25,7 @@ below closes that gap.
 | Bot doesn't see messages in a group | **Privacy mode** | `features/privacy-mode.md`, `faq/what-messages-will-my-bot-get.md` |
 | Bot doesn't react to another bot | Bots never receive bot messages | `faq/why-doesnt-my-bot-see-messages-from-other-bots.md`, `features/bot-to-bot-communication.md` |
 | Pass a parameter through the bot link; referral/invite links | **Deep linking** (`?start=`) | `features/deep-linking.md` |
-| Change the bot's name, about text, commands, picture | **BotFather** | `features/botfather.md`, `features/botfather-commands.md`, `features/edit-bots.md` |
+| Change the bot's name, about text, commands, picture | **BotFather** | `features/botfather.md`, `features/edit-bots.md` |
 | Buttons attached under a message | **Inline keyboard** | `features/inline-keyboards.md` |
 | Buttons replacing the user's keyboard | **Reply keyboard** | `features/keyboards.md` |
 | Button to the left of the input field | **Menu button** | `features/menu-button.md` |
