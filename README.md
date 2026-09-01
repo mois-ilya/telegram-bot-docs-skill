@@ -36,7 +36,13 @@ There are no runtime npm dependencies.
 
 ### Codex
 
-Copy or clone the repository to your user skills directory:
+Clone the repository to your user skills directory:
+
+```bash
+git clone https://github.com/mois-ilya/telegram-bot-docs-skill.git ~/.codex/skills/telegram-bot-docs
+```
+
+The resulting directory is:
 
 ```text
 ~/.codex/skills/telegram-bot-docs/
