@@ -1,18 +1,28 @@
 {
   "name": "telegram-bot-docs-skill",
-  "version": "0.1.0-beta.2",
+  "version": "0.1.0-beta.3",
   "private": true,
   "description": "Agent Skill for freshness-checked Telegram Bot Platform documentation",
   "type": "module",
   "engines": {
     "node": ">=20"
   },
+  "files": [
+    "SKILL.md",
+    "LICENSE",
+    "README.md",
+    "agents/",
+    "reference/",
+    "scripts/refresh.mjs"
+  ],
   "scripts": {
-    "check": "node --check scripts/refresh.mjs && node --check scripts/smoke-install.mjs",
+    "check": "node --check scripts/refresh.mjs && node --check scripts/smoke-install.mjs && node --check scripts/smoke-host-layout.mjs",
     "test": "npm run test:offline",
-    "test:offline": "node --test tests/refresh.test.mjs tests/metadata.test.mjs",
+    "test:offline": "node --test tests/refresh.test.mjs tests/metadata.test.mjs tests/portability.test.mjs",
+    "test:portability": "node --test tests/portability.test.mjs",
     "test:live": "node --test tests/live.test.mjs",
     "test:all": "npm run test:offline && npm run test:live",
-    "smoke:install": "node scripts/smoke-install.mjs"
+    "smoke:install": "node scripts/smoke-install.mjs",
+    "smoke:hosts": "node scripts/smoke-host-layout.mjs"
   }
 }

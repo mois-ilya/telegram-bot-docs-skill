@@ -1,0 +1,63 @@
+name: Agent compatibility
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-compatibility-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Agent Skill contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: npm run test:portability
+
+  host-layout:
+    name: Relocated artifact (${{ matrix.host }} path)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        host: [claude-code, codex, universal]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: npm run smoke:hosts -- --host ${{ matrix.host }}
+
+  ecosystem-installer:
+    name: Skills CLI install (Claude, Codex, Gemini, OpenCode)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Install through the cross-agent Skills CLI
+        working-directory: ${{ runner.temp }}
+        run: |
+          npx --yes skills@1.5.23 add "$GITHUB_WORKSPACE" \
+            --skill telegram-bot-docs \
+            --agent claude-code codex gemini-cli opencode \
+            --copy --yes | tee "$RUNNER_TEMP/skills-install.log"
+      - name: Verify discovered install roots
+        working-directory: ${{ runner.temp }}
+        run: |
+          test -f .claude/skills/telegram-bot-docs/SKILL.md
+          test -f .agents/skills/telegram-bot-docs/SKILL.md
+          grep -F "Claude Code, Codex, Gemini CLI, OpenCode" "$RUNNER_TEMP/skills-install.log"

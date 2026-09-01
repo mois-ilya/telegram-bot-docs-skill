@@ -7,8 +7,12 @@ Use it when an agent needs to verify platform behavior, find an exact method or
 type, troubleshoot webhooks and payments, validate Mini App data, or answer a
 Telegram bot question with a link to the official source.
 
-The core skill is host-neutral and is verified with both Codex and Claude Code.
-`agents/openai.yaml` only adds optional Codex UI metadata; Claude Code does not
+The core skill is host-neutral. Pull requests verify its Agent Skills contract,
+published package, execution from unrelated working directories, and expected
+Claude Code, Codex, and universal `.agents/skills` install paths. A pinned
+cross-agent Skills CLI also verifies that the repository can be installed for
+Claude Code, Codex, Gemini CLI, and OpenCode.
+`agents/openai.yaml` only adds optional Codex UI metadata; other hosts do not
 need it to discover or run the skill.
 
 > Status: beta. The core cache and conversion workflow is tested; installation
@@ -177,9 +181,20 @@ Validate JavaScript syntax:
 npm run check
 ```
 
-Pushes and pull requests run the offline suite on supported Node.js versions.
+Run the deterministic portability contract and simulate clean installs in the
+Claude Code, Codex, and universal Agent Skills layouts:
+
+```bash
+npm run test:portability
+npm run smoke:hosts
+```
+
+Pushes and pull requests run the offline suite on supported Node.js versions,
+the portability contract, three host-layout checks, and a pinned cross-agent
+Skills CLI installation. These blocking checks require no model credentials.
 A scheduled workflow runs the live and clean-install checks against the current
-Telegram documentation.
+Telegram documentation. Model-driven reviews are supplementary because their
+results and credentials are not deterministic enough to be the portability gate.
 
 ## Project layout
 
