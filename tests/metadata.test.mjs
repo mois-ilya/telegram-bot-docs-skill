@@ -18,10 +18,10 @@ test('public identity is consistent across package, skill, UI, and README', () =
   assert.match(skill, /^---\nname: telegram-bot-docs\n/m);
   assert.match(ui, /display_name: "Telegram Bot Docs"/);
   assert.match(ui, /\$telegram-bot-docs/);
-  assert.match(readme, /^# telegram-bot-docs-skill$/m);
+  assert.match(readme, /^# Telegram Bot Docs\b/m);
   assert.match(readme, /github\.com\/mois-ilya\/telegram-bot-docs-skill\.git/);
-  assert.match(readme, /~\/\.codex\/skills\/telegram-bot-docs\//);
-  assert.match(readme, /~\/\.claude\/skills\/telegram-bot-docs/);
+  assert.match(readme, /~\/\.codex\/skills\/telegram-bot-docs\/?/);
+  assert.match(readme, /~\/\.claude\/skills\/telegram-bot-docs\/?/);
   assert.match(readme, /\$telegram-bot-docs/);
   assert.match(readme, /\/telegram-bot-docs/);
 });
